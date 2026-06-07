@@ -1,0 +1,44 @@
+{
+  "name": "bot-do-biel",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gabrielaraujorodrigues/Bot-do-biel.git"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "check": "node --check index.js",
+    "smoke": "node scripts/smoke-check.mjs",
+    "diagnose:pairing": "node scripts/diagnose-pairing.mjs",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:restart": "pm2 restart ecosystem.config.cjs"
+  },
+  "dependencies": {
+    "@adiwajshing/keyed-db": "^0.2.4",
+    "@dvyer/baileys": "github:DevYerZx/fsociety-Baileys#main",
+    "axios": "^1.16.0",
+    "bytenode": "^1.5.7",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.4.7",
+    "figlet": "^1.9.3",
+    "fluent-ffmpeg": "^2.1.2",
+    "pino": "^9.13.1",
+    "play-dl": "^1.9.7",
+    "punycode": "^2.3.1",
+    "qrcode-terminal": "^0.12.0",
+    "yt-search": "^2.10.4"
+  },
+  "overrides": {
+    "minimatch": "^10.2.1",
+    "lodash": "^4.17.21",
+    "follow-redirects": "^1.15.12",
+    "protobufjs": "^7.5.5",
+    "p-queue": "6.6.2"
+  }
+}
