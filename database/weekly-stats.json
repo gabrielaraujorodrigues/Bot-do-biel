@@ -1,0 +1,122 @@
+{
+  "weekKey": "2026-W19",
+  "startedAt": 1778110467017,
+  "users": {
+    "51907376960": {
+      "id": "51907376960",
+      "messages": 9,
+      "commands": 9,
+      "coins": 0,
+      "games": 0,
+      "wins": 0
+    },
+    "88077330554979": {
+      "id": "88077330554979",
+      "messages": 2,
+      "commands": 2,
+      "coins": 0,
+      "games": 0,
+      "wins": 0
+    },
+    "51990237032": {
+      "id": "51990237032",
+      "messages": 2,
+      "commands": 0,
+      "coins": 0,
+      "games": 0,
+      "wins": 0
+    },
+    "51913940860": {
+      "id": "51913940860",
+      "messages": 3,
+      "commands": 0,
+      "coins": 0,
+      "games": 0,
+      "wins": 0
+    },
+    "51900019654": {
+      "id": "51900019654",
+      "messages": 12,
+      "commands": 0,
+      "coins": 0,
+      "games": 0,
+      "wins": 0
+    },
+    "51935236874": {
+      "id": "51935236874",
+      "messages": 4,
+      "commands": 0,
+      "coins": 0,
+      "games": 0,
+      "wins": 0
+    },
+    "51926405633": {
+      "id": "51926405633",
+      "messages": 1,
+      "commands": 0,
+      "coins": 0,
+      "games": 0,
+      "wins": 0
+    },
+    "51948365286": {
+      "id": "51948365286",
+      "messages": 2,
+      "commands": 0,
+      "coins": 0,
+      "games": 0,
+      "wins": 0
+    },
+    "51908519951": {
+      "id": "51908519951",
+      "messages": 2,
+      "commands": 0,
+      "coins": 0,
+      "games": 0,
+      "wins": 0
+    },
+    "51916768441": {
+      "id": "51916768441",
+      "messages": 2,
+      "commands": 0,
+      "coins": 0,
+      "games": 0,
+      "wins": 0
+    },
+    "51964341928": {
+      "id": "51964341928",
+      "messages": 5,
+      "commands": 0,
+      "coins": 0,
+      "games": 0,
+      "wins": 0
+    }
+  },
+  "chats": {
+    "51907376960@s.whatsapp.net": {
+      "id": "51907376960@s.whatsapp.net",
+      "messages": 6,
+      "commands": 6
+    },
+    "88077330554979@lid": {
+      "id": "88077330554979@lid",
+      "messages": 2,
+      "commands": 2
+    },
+    "120363409325737726@g.us": {
+      "id": "120363409325737726@g.us",
+      "messages": 3,
+      "commands": 3
+    },
+    "120363425735543316@g.us": {
+      "id": "120363425735543316@g.us",
+      "messages": 33,
+      "commands": 0
+    }
+  },
+  "commands": {
+    "menu": 3,
+    "administradores": 2,
+    "play": 3,
+    "ytmp3": 3
+  }
+}
