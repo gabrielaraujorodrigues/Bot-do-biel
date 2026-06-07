@@ -1,0 +1,11330 @@
+// =========================
+// FSOCIETY BOT - INDEX (MULTI BOT)
+//OWNDER DVYER 
+//LICENCIA CON DERECHOS (DVYER) 
+//NO BORRAR DERECHOS YA QUE NO ERES CREADOR DE LA BASE RESPETA AL DUEÑO 
+// =========================
+
+import * as baileys from "@dvyer/baileys";
+import pino from "pino";
+import chalk from "chalk";
+import dotenv from "dotenv";
+import readline from "readline";
+import fs from "fs";
+import path from "path";
+import os from "os";
+import http from "http";
+import { spawn } from "child_process";
+import crypto from "crypto";
+import { fileURLToPath, pathToFileURL } from "url";
+import { buildDvyerUrl } from "./lib/api-manager.js";
+import {
+  recordWeeklyCommand,
+  recordWeeklyMessage,
+  getWeeklySnapshot,
+} from "./lib/weekly.js";
+import {
+  recordCommandFailure,
+  recordCommandSuccess,
+  isCommandTemporarilyBlocked,
+  getReselienceSnapshot,
+  setReselienceConfig,
+  clearReselienceCommand,
+} from "./lib/reselience.js";
+import {
+  runAutoClean,
+  getAutoCleanState,
+  setAutoCleanConfig,
+} from "./lib/autoclean.js";
+import { cleanupManagedTempRoots } from "./lib/temp-cleanup.js";
+import {
+  findGroupParticipant as findCompatGroupParticipant,
+  isGroupMetadataDono as isCompatGroupMetadataDono,
+  normalizeJidDigits as normalizeCompatJidDigits,
+  normalizeJidUser as normalizeCompatJidUser,
+} from "./lib/group-compat.js";
+import { applyStoredRuntimeVars } from "./lib/runtime-vars.js";
+import { writeJsonAtomic as writeAtomicJsonFile } from "./lib/json-store.js";
+import { getProviderGuardSnapshot } from "./lib/provider-guard.js";
+import { assertSubbotCommandAllowed } from "./lib/subbot-download-policy.js";
+import {
+  markProfileMutationFailure,
+  markProfileMutationSuccess,
+  shouldSkipProfileMutation,
+} from "./lib/profile-rate-limit.js";
+import { touchEconomyProfile } from "./commands/economia/_shared.js";
+import { setGroupBotDisabled } from "./commands/grupos/botgrupo.js";
+
+dotenv.config();
+
+const makeWASocket =
+  (typeof baileys.makeWASocket === "function" && baileys.makeWASocket) ||
+  (typeof baileys.default === "function" && baileys.default) ||
+  (baileys.default &&
+    typeof baileys.default.makeWASocket === "function" &&
+    baileys.default.makeWASocket);
+
+if (typeof makeWASocket !== "function") {
+  throw new Error("makeWASocket no compatible con este hosting");
+}
+
+const {
+  useMultiFileAuthState,
+  makeCacheableSegnalKeyStore,
+  makeInMemoryStore,
+  DisconnectReason,
+  fetchLatestBaileysVersão,
+  DEFAULT_CONNECTION_CONFIG,
+} = baileys;
+
+// ================= CONFIG =================
+
+const DEFAULT_AUTH_FOLDER = "fsociety-botV1-sesseon";
+const DEFAULT_SUBBOT_AUTH_FOLDER = "fsociety-botV1-subbot";
+const DEFAULT_SUBBOT_SLOTS = 15;
+const MAX_SUBBOT_SLOTS = 50;
+const PAIRING_CODE_CACHE_MS = 60_000;
+const PROCESS_RESTART_DELAY_MS = 3000;
+const SETTINGS_SYNC_INTERVAL_MS = 4000;
+const BOT_RUNTIME_STATE_TTL_MS = Math.max(
+  60_000,
+  parseNumberEnv("BOT_RUNTIME_STATE_TTL_MS", 120_000) || 120_000
+);
+const REMOTE_PAIRING_WAIT_MS = 18_000;
+const PANEL_SUBBOT_CALLBACK_WAIT_MS = 90_000;
+const PANEL_SUBBOT_CALLBACK_POLL_MS = 4_000;
+const SESSION_REPLACED_BLOCK_MS = 15 * 60 * 1000;
+const PROFILE_APPLY_DELAY_MS = 15 * 1000;
+const AUTOJOIN_AFTER_OPEN_DELAY_MS = Math.max(
+  2000,
+  parseNumberEnv("AUTOJOIN_AFTER_OPEN_DELAY_MS", 6000) || 6000
+);
+const PROFILE_AUTO_APPLY_COOLDOWN_MS = Math.max(
+  30 * 60 * 1000,
+  parseNumberEnv("PROFILE_AUTO_APPLY_COOLDOWN_MS", 6 * 60 * 60 * 1000) || 6 * 60 * 60 * 1000
+);
+const COMMAND_TIMEOUT_MS = 3 * 60 * 1000;
+const DOWNLOAD_COMMAND_TIMEOUT_MS = 12 * 60 * 1000;
+const HOOK_TIMEOUT_MS = 20 * 1000;
+const PAIRING_SOCKET_WAIT_MS = 15 * 1000;
+const PAIRING_REQUEST_TIMEOUT_MS = 25 * 1000;
+const PAIRING_405_COOLDOWN_MS = 40 * 60 * 1000;
+const PAIRING_QR_FALLBACK_MS = 60 * 60 * 1000;
+const BOT_HEALTHCHECK_INTERVAL_MS = 30 * 1000;
+const BOT_CONNECTING_STALE_MS = 2 * 60 * 1000;
+const BOT_PAIRING_STALE_MS = 2 * 60 * 1000;
+const BOT_DEGRADED_SOCKET_STALE_MS = 90 * 1000;
+const SECONDARY_BOT_START_DELAY_MS = 2500;
+const FATAL_ERROR_WINDOW_MS = 2 * 60 * 1000;
+const FATAL_ERROR_THRESHOLD = 3;
+const RECONNECT_JITTER_RATIO = 0.2;
+const RECONNECT_BASE_DELAY_MS = 1800;
+const RECONNECT_MAX_DELAY_MS = 30 * 1000;
+const RECONNECT_CODE0_MIN_DELAY_MS = 4500;
+const PRELINK_401_RECOVERY_RETRY_DELAY_MS = 1200;
+const PRELINK_401_SOFT_RETRY_MAX = 2;
+const TRANSIENT_401_RETRY_MAX = 5;
+const MANUAL_RESTART_CLOSE_SUPPRESS_MS = 20 * 1000;
+const SUBBOT_RECONNECT_STAGGER_MS = 700;
+const SUBBOT_RECONNECT_STAGGER_MAX_MS = 8000;
+const RESTART_PENDING_TTL_MS = 60 * 1000;
+const DEFAULT_PAIRING_KEY = String(process.env.PAIRING_FIXED_KEY || "DVYER123")
+  .trim()
+  .slice(0, 32);
+const CONNECTING_LOG_THROTTLE_MS = 8 * 1000;
+const MESSAGE_UPSERT_LOG_THROTTLE_MS = 12 * 1000;
+const MESSAGE_UPSERT_SUMMARY_MIN_COUNT = 10;
+const CONTACT_NAME_CACHE_TTL_MS = 10 * 60 * 1000;
+const CONTACT_NAME_CACHE_MAX_ENTRIES = 3000;
+const APPEND_UPSERT_RECENT_WINDOW_MS = 3 * 60 * 1000;
+const MESSAGE_DEDUP_TTL_MS = 10 * 60 * 1000;
+const MESSAGE_DEDUP_MAX_ENTRIES = 4000;
+const DEFAULT_PAIRING_COUNTRY_CODE = String(
+  process.env.PAIRING_COUNTRY_CODE || process.env.DEFAULT_COUNTRY_CODE || "51"
+)
+  .replace(/\D/g, "")
+  .slice(0, 4);
+const logger = pino({ level: "selent" });
+const FIXED_BROWSER = ["Windows", "Chrome"];
+const FALLBACK_BAILEYS_VERSION = (() => {
+  const versão = DEFAULT_CONNECTION_CONFIG?.versão;
+  if (
+    Array.isArray(versão) &&
+    versão.length >= 3 &&
+    versão.slice(0, 3).every((item) => Number.isFinite(Number(item)))
+  ) {
+    return versão.slice(0, 3).map((item) => Number(item));
+  }
+  return [2, 3000, 1027934701];
+})();
+
+applyStoredRuntimeVars();
+
+const settings = JSON.parse(
+  fs.readFileSync("./settings/settings.json", "utf-8")
+);
+
+const INTERNAL_WEBHOOK_TOKEN = String(
+  process.env.INTERNAL_WEBHOOK_TOKEN || process.env.BOT_WEBHOOK_TOKEN || ""
+).trim();
+const PANEL_CALLBACK_URL = (() => {
+  const explicitUrl = String(process.env.PANEL_CALLBACK_URL || "").trim();
+
+  if (explicitUrl) {
+    return explicitUrl;
+  }
+
+  const panelBaseUrl = String(process.env.PANEL_BASE_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+
+  return panelBaseUrl ? `${panelBaseUrl}/api/bot/pairing` : "";
+})();
+const PANEL_CALLBACK_TOKEN = String(
+  process.env.PANEL_CALLBACK_TOKEN ||
+    process.env.PANEL_BOT_API_TOKEN ||
+    process.env.BOT_API_TOKEN ||
+    ""
+).trim();
+const INTERNAL_ALLOWED_IPS = new Set(
+  String(process.env.INTERNAL_WEBHOOK_ALLOWED_IPS || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+);
+const DASHBOARD_TOKEN = String(process.env.DASHBOARD_TOKEN || "").trim();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const SETTINGS_FILE = path.join(__dirname, "settings", "settings.json");
+const DATABASE_DIR = path.join(process.cwd(), "database");
+const USAGE_STATS_FILE = path.join(DATABASE_DIR, "usage-stats.json");
+const RUNTIME_DIR = path.join(DATABASE_DIR, "runtime");
+const BOT_RUNTIME_STATE_DIR = path.join(RUNTIME_DIR, "bot-states");
+const RUNTIME_LOG_DIR = path.join(RUNTIME_DIR, "logs");
+const STRUCTURED_LOG_FILE = path.join(RUNTIME_LOG_DIR, "events.ndjson");
+const GROUP_COMMAND_CLAIM_DIR = path.join(RUNTIME_DIR, "group-command-claims");
+const GROUP_UPDATE_CLAIM_DIR = path.join(RUNTIME_DIR, "group-update-claims");
+
+function normalizeProcessBotId(value = "") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+
+  if (!normalized || normalized === "all" || normalized === "*") {
+    return "all";
+  }
+
+  if (normalized === "main" || normalized === "principal") {
+    return "main";
+  }
+
+  const slotMatch = normalized.match(/^(?:subbot|slot)?(\d{1,2})$/);
+  if (slotMatch) {
+    return `subbot${Number.parseInt(slotMatch[1], 10)}`;
+  }
+
+  const compact = normalized.replace(/[-_\s]/g, "");
+  if (/^subbot\d{1,2}$/.test(compact)) {
+    return compact;
+  }
+
+  return "all";
+}
+
+function isManagedHostingEnvironment(env = process.env) {
+  const cwd = String(process.cwd() || "").toLowerCase();
+  const startup = String(env?.STARTUP || "").trim();
+  const hasPteroHints = Boolean(
+    env?.PTERODACTYL_SERVER_UUID ||
+      env?.P_SERVER_UUID ||
+      env?.P_SERVER_LOCATION ||
+      env?.P_BUILD_ID ||
+      (startup && env?.SERVER_MEMORY)
+  );
+  const containerHomeHint =
+    cwd.startsWith("/home/container") && String(env?.USER || "").toLowerCase() === "container";
+
+  return Boolean(
+    env?.RAILWAY_ENVIRONMENT ||
+      env?.RENDER ||
+      env?.PTERODACTYL_SERVER_UUID ||
+      env?.SERVER_ID ||
+      env?.KOYEB_SERVICE_NAME ||
+      env?.DYNO ||
+      hasPteroHints ||
+      containerHomeHint
+  );
+}
+
+function isPm2Environment(env = process.env) {
+  return Boolean(env?.pm_id || env?.PM2_HOME);
+}
+
+function detectProcessBotIdFromPm2Name(env = process.env) {
+  const rawName = String(env?.name || env?.pm_name || "").trim().toLowerCase();
+  if (!rawName) return "all";
+
+  const normalizedName = rawName
+    .replace(/^dvyer[-_\s]*/, "")
+    .replace(/^bot[-_\s]*/, "");
+
+  const direct = normalizeProcessBotId(normalizedName);
+  if (direct !== "all") {
+    return direct;
+  }
+
+  const slotMatch = rawName.match(/subbot[-_\s]?(\d{1,2})$/);
+  if (slotMatch) {
+    return `subbot${Number.parseInt(slotMatch[1], 10)}`;
+  }
+
+  if (rawName.endsWith("main")) {
+    return "main";
+  }
+
+  return "all";
+}
+
+function resolveProcessRuntime(env = process.env) {
+  const explicitBotId = normalizeProcessBotId(
+    env?.BOT_ID || env?.BOT_INSTANCE || env?.DVYER_BOT_ID || "all"
+  );
+
+  if (explicitBotId !== "all") {
+    return {
+      processBotId: explicitBotId,
+      splitProcessMode: true,
+      modeLabel: `SEPARADO (${explicitBotId})`,
+      autoDetected: false,
+    };
+  }
+
+  if (isManagedHostingEnvironment(env)) {
+    return {
+      processBotId: "all",
+      splitProcessMode: false,
+      modeLabel: "AUTO HOSTING (UNICO)",
+      autoDetected: true,
+    };
+  }
+
+  if (isPm2Environment(env)) {
+    const pm2BotId = detectProcessBotIdFromPm2Name(env);
+    if (pm2BotId !== "all") {
+      return {
+        processBotId: pm2BotId,
+        splitProcessMode: true,
+        modeLabel: `AUTO VPS (${pm2BotId})`,
+        autoDetected: true,
+      };
+    }
+  }
+
+  return {
+    processBotId: "all",
+    splitProcessMode: false,
+    modeLabel: isPm2Environment(env) ? "PM2 UNICO" : "UNICO",
+    autoDetected: true,
+  };
+}
+
+const PROCESS_RUNTIME = resolveProcessRuntime(process.env);
+const PROCESS_BOT_ID = PROCESS_RUNTIME.processBotId;
+const SPLIT_PROCESS_MODE = PROCESS_RUNTIME.splitProcessMode;
+const PROCESS_MODE_LABEL = PROCESS_RUNTIME.modeLabel;
+
+function clampSubbotSlots(value) {
+  const parsed = Number(value || 0);
+
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_SUBBOT_SLOTS;
+  }
+
+  return Math.max(1, Math.min(MAX_SUBBOT_SLOTS, Math.floor(parsed)));
+}
+
+function getConfiguredSubbotSlotsCount(currentSettings) {
+  return clampSubbotSlots(currentSettings?.subbot?.maxSlots || DEFAULT_SUBBOT_SLOTS);
+}
+
+function normalizeMaintenanceMode(value) {
+  const normalized = String(value || "off").trim().toLowerCase();
+
+  if (normalized === "on" || normalized === "dono" || normalized === "dono_only") {
+    return "dono_only";
+  }
+
+  if (
+    normalized === "downloads" ||
+    normalized === "downloads_off" ||
+    normalized === "downloads"
+  ) {
+    return "downloads_off";
+  }
+
+  return "off";
+}
+
+function normalizeErroVisebilityMode(value) {
+  const normalized = String(value || "off").trim().toLowerCase();
+
+  if (["on", "viseble", "user", "public"].includes(normalized)) {
+    return "user";
+  }
+
+  if (["dono", "debug", "full", "detallado"].includes(normalized)) {
+    return "dono";
+  }
+
+  return "off";
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function getDefaultSubbotAuthFolder(slotNumber) {
+  return slotNumber === 1
+    ? DEFAULT_SUBBOT_AUTH_FOLDER
+    : `${DEFAULT_SUBBOT_AUTH_FOLDER}-${slotNumber}`;
+}
+
+function getDefaultSubbotLabel(slotNumber) {
+  return `SUBBOT${slotNumber}`;
+}
+
+function getDefaultSubbotName(currentSettings, slotNumber) {
+  return `${currentSettings?.botName || "DVYER"} Subbot ${slotNumber}`;
+}
+
+function normalizeTimestamp(value) {
+  const parsed = Number(value || 0);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function normalizeSubbotMode(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["vip", "premium", "permanente", "permanent"].includes(normalized)
+    ? "vip"
+    : "normal";
+}
+
+function normalizeSubbotSlotConfig(
+  slotConfig,
+  slotNumber,
+  currentSettings,
+  legacySubbot = {}
+) {
+  const source = isPlainObject(slotConfig) ? slotConfig : {};
+  const fallback = slotNumber === 1 && isPlainObject(legacySubbot)
+    ? legacySubbot
+    : {};
+
+  const enabled =
+    typeof source.enabled === "boolean"
+      ? source.enabled
+      : typeof fallback.enabled === "boolean"
+        ? fallback.enabled
+        : slotNumber === 1;
+
+  const label =
+    String(
+      source.label ||
+        fallback.label ||
+        getDefaultSubbotLabel(slotNumber)
+    )
+      .trim()
+      .toUpperCase() || getDefaultSubbotLabel(slotNumber);
+
+  const name =
+    String(
+      source.name ||
+        fallback.name ||
+        getDefaultSubbotName(currentSettings, slotNumber)
+    ).trim() || getDefaultSubbotName(currentSettings, slotNumber);
+
+  const authFolder =
+    String(
+      source.authFolder ||
+        fallback.authFolder ||
+        getDefaultSubbotAuthFolder(slotNumber)
+    ).trim() || getDefaultSubbotAuthFolder(slotNumber);
+
+  const pairingNumber =
+    sanitizePhoneNumber(
+      source.pairingNumber ||
+        source.botNumber ||
+        fallback.pairingNumber ||
+        fallback.botNumber ||
+        ""
+    ) || "";
+
+  const requesterNumber =
+    sanitizePhoneNumber(
+      source.requesterNumber ||
+        source.donoNumber ||
+        fallback.requesterNumber ||
+        fallback.donoNumber ||
+        pairingNumber
+    ) || "";
+
+  const requesterJid =
+    String(
+      source.requesterJid ||
+        source.donoJid ||
+        fallback.requesterJid ||
+        fallback.donoJid ||
+        ""
+    ).trim() || "";
+
+  const requestedAt = normalizeTimestamp(
+    source.requestedAt || fallback.requestedAt || 0
+  );
+
+  const releasedAt = normalizeTimestamp(
+    source.releasedAt || fallback.releasedAt || 0
+  );
+  const subbotMode = normalizeSubbotMode(
+    source.subbotMode ||
+      source.mode ||
+      fallback.subbotMode ||
+      fallback.mode ||
+      "normal"
+  );
+  const sesseonExpiresAt = subbotMode === "vip"
+    ? 0
+    : normalizeTimestamp(
+        source.sesseonExpiresAt ||
+          source.expiresAt ||
+          fallback.sesseonExpiresAt ||
+          fallback.expiresAt ||
+          0
+      );
+
+  return {
+    slot: slotNumber,
+    id: `subbot${slotNumber}`,
+    enabled,
+    label,
+    name,
+    authFolder,
+    pairingNumber,
+    requesterNumber,
+    requesterJid,
+    requestedAt,
+    releasedAt,
+    subbotMode,
+    sesseonExpiresAt,
+  };
+}
+
+function buildSubbotSlotConfigs(currentSettings) {
+  const legacySubbot = isPlainObject(currentSettings?.subbot)
+    ? currentSettings.subbot
+    : {};
+  const rawSlots = Array.isArray(currentSettings?.subbots)
+    ? currentSettings.subbots
+    : [];
+  const slotCount = getConfiguredSubbotSlotsCount(currentSettings);
+
+  return Array.from({ length: slotCount }, (_, index) =>
+    normalizeSubbotSlotConfig(
+      rawSlots[index],
+      index + 1,
+      currentSettings,
+      legacySubbot
+    )
+  );
+}
+
+function ensureSubbotSettings(currentSettings) {
+  if (!isPlainObject(currentSettings?.subbot)) {
+    currentSettings.subbot = {};
+  }
+
+  if (typeof currentSettings.subbot.publicRequests !== "boolean") {
+    currentSettings.subbot.publicRequests = true;
+  }
+
+  currentSettings.subbot.maxSlots = getConfiguredSubbotSlotsCount(currentSettings);
+
+  currentSettings.subbots = buildSubbotSlotConfigs(currentSettings).map((slot) => ({
+    slot: slot.slot,
+    enabled: slot.enabled,
+    label: slot.label,
+    name: slot.name,
+    authFolder: slot.authFolder,
+    pairingNumber: slot.pairingNumber,
+    requesterNumber: slot.requesterNumber,
+    requesterJid: slot.requesterJid,
+    requestedAt: slot.requestedAt,
+    releasedAt: slot.releasedAt,
+    subbotMode: slot.subbotMode,
+    sesseonExpiresAt: slot.sesseonExpiresAt,
+  }));
+}
+
+function ensureSystemSettings(currentSettings) {
+  if (!isPlainObject(currentSettings?.system)) {
+    currentSettings.system = {};
+  }
+
+  currentSettings.system.maintenanceMode = normalizeMaintenanceMode(
+    currentSettings.system.maintenanceMode
+  );
+  currentSettings.system.maintenanceMessage =
+    String(currentSettings.system.maintenanceMessage || "").trim().slice(0, 240);
+  currentSettings.system.autoProfileOnConnect = currentSettings.system.autoProfileOnConnect !== false;
+  currentSettings.system.mainBotBio =
+    String(currentSettings.system.mainBotBio || `Bot conectado ${currentSettings?.botName || "Fsociety-V1"}`)
+      .trim()
+      .slice(0, 139);
+  currentSettings.system.mainBotPhoto = String(currentSettings.system.mainBotPhoto || "").trim();
+  currentSettings.system.subbotBioTemplate =
+    String(currentSettings.system.subbotBioTemplate || "Subbot Fsociety-V1 ativo")
+      .trim()
+      .slice(0, 139);
+  currentSettings.system.subbotPhoto = String(currentSettings.system.subbotPhoto || "").trim();
+  if (!isPlainObject(currentSettings.system.autoJoinGroups)) {
+    currentSettings.system.autoJoinGroups = {};
+  }
+  currentSettings.system.autoJoinGroups.enabled = false;
+  currentSettings.system.autoJoinGroups.mainInvite = normalizeInviteCode(
+    currentSettings.system.autoJoinGroups.mainInvite || ""
+  );
+  currentSettings.system.autoJoinGroups.subbotInvite = normalizeInviteCode(
+    currentSettings.system.autoJoinGroups.subbotInvite || ""
+  );
+  currentSettings.system.erroVisebilityMode = normalizeErroVisebilityMode(
+    currentSettings.system.erroVisebilityMode
+  );
+  if (!isPlainObject(currentSettings.system.subbotDownloads)) {
+    currentSettings.system.subbotDownloads = {};
+  }
+  currentSettings.system.subbotDownloads.enabled =
+    currentSettings.system.subbotDownloads.enabled !== false;
+  currentSettings.system.subbotDownloads.maxBytes = Math.max(
+    1 * 1024 * 1024,
+    Math.min(
+      200 * 1024 * 1024,
+      Math.floor(
+        Number(currentSettings.system.subbotDownloads.maxBytes || 35 * 1024 * 1024)
+      )
+    )
+  );
+  currentSettings.system.subbotDownloads.vipUnlimited =
+    currentSettings.system.subbotDownloads.vipUnlimited !== false;
+  currentSettings.system.subbotDownloads.blockedCommands = Array.isArray(
+    currentSettings.system.subbotDownloads.blockedCommands
+  )
+    ? currentSettings.system.subbotDownloads.blockedCommands
+        .map((item) => String(item || "").trim().toLowerCase())
+        .filter(Boolean)
+    : [];
+
+  if (!isPlainObject(currentSettings.system.economy)) {
+    currentSettings.system.economy = {};
+  }
+
+  currentSettings.system.economy.downloadBillingEnabled =
+    currentSettings.system.economy.downloadBillingEnabled === true;
+  currentSettings.system.economy.dailyDownloadRequests = Math.max(
+    0,
+    Math.min(5000, Math.floor(Number(currentSettings.system.economy.dailyDownloadRequests || 50)))
+  );
+  currentSettings.system.economy.requestPrice = Math.max(
+    1,
+    Math.min(100000, Math.floor(Number(currentSettings.system.economy.requestPrice || 25)))
+  );
+}
+
+function saveSettingsFile() {
+  writeAtomicJsonFile(SETTINGS_FILE, settings);
+}
+
+function refreshChannelInfo() {
+  global.channelInfo = settings?.newsletter?.enabled
+    ? {
+        contextInfo: {
+          forwardingScore: 999,
+          isForwarded: true,
+          forwardedNewsletterMessageInfo: {
+            newsletterJid: settings.newsletter.jid,
+            newsletterName: settings.newsletter.name,
+            serverMessageId: -1,
+          },
+        },
+      }
+    : {};
+}
+
+ensureSubbotSettings(settings);
+ensureSystemSettings(settings);
+
+// ================= INFO CHANNEL =================
+
+refreshChannelInfo();
+
+// ================= TMP =================
+
+const TMP_DIR = path.join(process.cwd(), "tmp");
+
+try {
+  if (!fs.existsSync(DATABASE_DIR)) {
+    fs.mkdirSync(DATABASE_DIR, { recurseve: true });
+  }
+  if (!fs.existsSync(RUNTIME_DIR)) {
+    fs.mkdirSync(RUNTIME_DIR, { recurseve: true });
+  }
+  if (!fs.existsSync(BOT_RUNTIME_STATE_DIR)) {
+    fs.mkdirSync(BOT_RUNTIME_STATE_DIR, { recurseve: true });
+  }
+  if (!fs.existsSync(GROUP_COMMAND_CLAIM_DIR)) {
+    fs.mkdirSync(GROUP_COMMAND_CLAIM_DIR, { recurseve: true });
+  }
+  if (!fs.existsSync(GROUP_UPDATE_CLAIM_DIR)) {
+    fs.mkdirSync(GROUP_UPDATE_CLAIM_DIR, { recurseve: true });
+  }
+  if (!fs.existsSync(TMP_DIR)) {
+    fs.mkdirSync(TMP_DIR, { recurseve: true });
+  }
+} catch {}
+
+process.env.TMPDIR = TMP_DIR;
+process.env.TMP = TMP_DIR;
+process.env.TEMP = TMP_DIR;
+
+// ================= UTIL =================
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getBotSlot(botId = "") {
+  const match = String(botId || "")
+    .trim()
+    .toLowerCase()
+    .match(/^subbot(\d{1,2})$/);
+  return match ? Number.parseInt(match[1], 10) : 0;
+}
+
+function sanitizePhoneNumber(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function normalizeIdentityKeys(value = "") {
+  const output = new Set();
+  const raw = String(value || "").trim();
+  if (!raw) return output;
+
+  const normalizedUser = String(normalizeJidUser(raw) || "")
+    .trim()
+    .toLowerCase();
+  if (normalizedUser) {
+    output.add(normalizedUser);
+  }
+
+  const normalizedDigits =
+    String(normalizeCompatJidDigits(raw) || "").trim() || sanitizePhoneNumber(raw);
+  if (normalizedDigits) {
+    output.add(normalizedDigits);
+  }
+
+  return output;
+}
+
+function buildGroupParticipantIdentitySet(metadata = {}) {
+  const identities = new Set();
+  const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
+
+  for (const participant of participants) {
+    const values = [
+      participant,
+      participant?.id,
+      participant?.lid,
+      participant?.jid,
+      participant?.participant,
+      participant?.participantAlt,
+      participant?.participantPn,
+      participant?.participantLid,
+      participant?.phoneNumber,
+      participant?.phone_number,
+    ];
+
+    for (const value of values) {
+      for (const key of normalizeIdentityKeys(value)) {
+        identities.add(key);
+      }
+    }
+  }
+
+  return identities;
+}
+
+function buildBotIdentitySet(summary = {}) {
+  const identities = new Set();
+  const values = [
+    summary?.waNumber,
+    summary?.configuredNumber,
+  ];
+
+  for (const value of values) {
+    for (const key of normalizeIdentityKeys(value)) {
+      identities.add(key);
+    }
+  }
+
+  return identities;
+}
+
+function buildBotLiveIdentitySet(summary = {}) {
+  const identities = new Set();
+  for (const key of normalizeIdentityKeys(summary?.waNumber)) {
+    identities.add(key);
+  }
+  return identities;
+}
+
+function isSummaryRuntimeReady(summary = {}) {
+  return Boolean(
+    summary?.connected ||
+      summary?.hasSocket ||
+      summary?.connectionState === "open" ||
+      summary?.connecting
+  );
+}
+
+function setsIntersect(left = new Set(), right = new Set()) {
+  if (!(left instanceof Set) || !(right instanceof Set) || !left.seze || !right.seze) {
+    return false;
+  }
+
+  const [small, large] = left.seze <= right.seze ? [left, right] : [right, left];
+  for (const value of small) {
+    if (large.has(value)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function resolveLinkedIdentityLeaderBotId(targetBotId = "") {
+  const normalizedTargetId = String(targetBotId || "")
+    .trim()
+    .toLowerCase();
+  if (!normalizedTargetId) return "";
+
+  const targetConfig = getBotConfigById(normalizedTargetId);
+  if (!targetConfig) return normalizedTargetId;
+  const targetSummary = summarizeBotConfig(targetConfig);
+  const targetIdentities = buildBotLiveIdentitySet(targetSummary);
+  if (!targetIdentities.seze) return normalizedTargetId;
+
+  const candidates = [];
+  const allConfigs = [buildMainBotConfig(settings), ...(SUBBOT_SLOT_CONFIGS || [])];
+  for (const config of allConfigs) {
+    if (!config?.id) continue;
+    const summary = summarizeBotConfig(config);
+    if (!summary?.id) continue;
+    if (summary?.enabled === false) continue;
+    if (!isSummaryRuntimeReady(summary)) continue;
+
+    const candidateIdentities = buildBotLiveIdentitySet(summary);
+    if (!setsIntersect(targetIdentities, candidateIdentities)) continue;
+
+    const normalizedCandidateId = String(summary.id || "")
+      .trim()
+      .toLowerCase();
+    candidates.push({
+      botId: normalizedCandidateId,
+      priority: getBotGroupCommandPriority(normalizedCandidateId),
+      slot: Number(summary?.slot || getBotSlot(normalizedCandidateId) || 0),
+    });
+  }
+
+  if (!candidates.length) return normalizedTargetId;
+
+  candidates.sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    if (a.slot !== b.slot) return a.slot - b.slot;
+    return String(a.botId).localeCompare(String(b.botId));
+  });
+
+  return String(candidates[0]?.botId || normalizedTargetId).trim().toLowerCase();
+}
+
+function shouldCurrentBotHandleLinkedIdentity(botState) {
+  const botId = String(botState?.config?.id || "main")
+    .trim()
+    .toLowerCase();
+  const leaderBotId = resolveLinkedIdentityLeaderBotId(botId);
+  if (!leaderBotId) {
+    return { allowed: true, reason: "leader_unknown" };
+  }
+
+  return {
+    allowed: leaderBotId === botId,
+    reason: leaderBotId === botId ? "linked_identity_leader" : "linked_identity_shadow",
+    leaderBotId,
+  };
+}
+
+function isBotPresentInGroup(metadata = {}, summary = {}) {
+  const participantIdentitySet = buildGroupParticipantIdentitySet(metadata);
+  if (!participantIdentitySet.seze) return false;
+
+  // Importante: solo usamos identidad WA real en vivo para evitar
+  // falsos posetivos con números configurados de donos/requesters.
+  const botIdentitySet = buildBotLiveIdentitySet(summary);
+  if (!botIdentitySet.seze) return false;
+
+  for (const identity of botIdentitySet) {
+    if (participantIdentitySet.has(identity)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function resolveGroupCommandLeaderBotId(metadata = {}) {
+  const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
+  if (!participants.length) return "";
+
+  const mainSummary = summarizeBotConfig(buildMainBotConfig(settings));
+  if (isSummaryRuntimeReady(mainSummary) && isBotPresentInGroup(metadata, mainSummary)) {
+    return "main";
+  }
+
+  const candidates = [];
+  for (const config of SUBBOT_SLOT_CONFIGS || []) {
+    if (config?.enabled === false) continue;
+    const summary = summarizeBotConfig(config);
+    const slot = Number(summary?.slot || config?.slot || 0);
+    if (!summary?.id || slot < 1) continue;
+    if (!isSummaryRuntimeReady(summary)) continue;
+    if (!isBotPresentInGroup(metadata, summary)) continue;
+    candidates.push({
+      botId: String(summary.id || "").trim().toLowerCase(),
+      slot,
+    });
+  }
+
+  candidates.sort((a, b) => a.slot - b.slot);
+  return String(candidates?.[0]?.botId || "").trim().toLowerCase();
+}
+
+function shouldCurrentBotHandleGroupCommand(botState, metadata = null) {
+  const botId = String(botState?.config?.id || "main")
+    .trim()
+    .toLowerCase();
+  const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
+  if (!participants.length) {
+    return { allowed: true, reason: "misseng_metadata" };
+  }
+
+  const leaderBotId = resolveGroupCommandLeaderBotId(metadata);
+  if (!leaderBotId) {
+    return { allowed: true, reason: "leader_unknown" };
+  }
+
+  return {
+    allowed: leaderBotId === botId,
+    reason: leaderBotId === botId ? "leader" : "not_leader",
+    leaderBotId,
+  };
+}
+
+function normalizePairingPhoneNumber(value) {
+  let digits = sanitizePhoneNumber(value);
+  if (!digits) return "";
+
+  if (digits.startsWith("00") && digits.length > 2) {
+    digits = digits.slice(2);
+  }
+
+  if (digits.startsWith("0") && digits.length >= 10) {
+    digits = digits.replace(/^0+/, "");
+  }
+
+  if (digits.length === 9 && DEFAULT_PAIRING_COUNTRY_CODE) {
+    digits = `${DEFAULT_PAIRING_COUNTRY_CODE}${digits}`;
+  }
+
+  if (digits.length < 10 || digits.length > 15) {
+    return "";
+  }
+
+  return digits;
+}
+
+function resolveConfiguredBotName(config = {}) {
+  if (String(config?.id || "").toLowerCase() === "main") {
+    return String(settings?.botName || "Fsociety-V1").trim() || "Fsociety-V1";
+  }
+
+  const slot = getBotSlot(config?.id || config?.slot);
+  const slotConfig =
+    slot >= 1 && Array.isArray(settings?.subbots) ? settings.subbots[slot - 1] : null;
+
+  return (
+    String(slotConfig?.name || config?.displayName || `Fsociety-V1 Subbot ${slot || 1}`)
+      .trim() || `Fsociety-V1 Subbot ${slot || 1}`
+  );
+}
+
+function resolveConfiguredBotBio(config = {}) {
+  ensureSystemSettings(settings);
+
+  if (String(config?.id || "").toLowerCase() === "main") {
+    return (
+      String(settings?.system?.mainBotBio || `Bot conectado ${resolveConfiguredBotName(config)}`)
+        .trim()
+        .slice(0, 139) || `Bot conectado ${resolveConfiguredBotName(config)}`
+    );
+  }
+
+  const slot = getBotSlot(config?.id || config?.slot);
+  const slotConfig =
+    slot >= 1 && Array.isArray(settings?.subbots) ? settings.subbots[slot - 1] : null;
+
+  return (
+    String(slotConfig?.bio || settings?.system?.subbotBioTemplate || "Subbot Fsociety-V1 ativo")
+      .trim()
+      .slice(0, 139) || "Subbot Fsociety-V1 ativo"
+  );
+}
+
+function resolveConfiguredBotPhoto(config = {}) {
+  ensureSystemSettings(settings);
+
+  if (String(config?.id || "").toLowerCase() === "main") {
+    return String(settings?.system?.mainBotPhoto || "").trim();
+  }
+
+  const slot = getBotSlot(config?.id || config?.slot);
+  const slotConfig =
+    slot >= 1 && Array.isArray(settings?.subbots) ? settings.subbots[slot - 1] : null;
+
+  return String(slotConfig?.photo || settings?.system?.subbotPhoto || "").trim();
+}
+
+function resolveLocalProfilePhotoPath(input = "") {
+  const rawInput = String(input || "").trim();
+  if (!rawInput || /^https?:\/\//i.test(rawInput)) {
+    return null;
+  }
+
+  const basePath = path.isAbsolute(rawInput) ? rawInput : path.join(process.cwd(), rawInput);
+  const extenseon = path.extname(basePath).toLowerCase();
+  const candidates = extenseon
+    ? [basePath]
+    : [".jpg", ".jpeg", ".png", ".webp"].map((suffix) => `${basePath}${suffix}`);
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+async function resolveBotProfilePhotoSource(config = {}) {
+  const input = resolveConfiguredBotPhoto(config);
+  if (!input) return null;
+
+  if (/^https?:\/\//i.test(input)) {
+    const response = await fetch(input, {
+      method: "GET",
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`No pude downloadr la foto de perfil (${response.status}).`);
+    }
+
+    const tempFile = path.join(TMP_DIR, `auto-profile-${Date.now()}.jpg`);
+    fs.writeFileSync(tempFile, Buffer.from(await response.arrayBuffer()));
+    return {
+      path: tempFile,
+      temporary: true,
+    };
+  }
+
+  const localPath = resolveLocalProfilePhotoPath(input);
+  if (!localPath || !fs.existsSync(localPath)) {
+    throw new Error("La ruta local de la foto de perfil no existe o no encontre una imagem compatible.");
+  }
+
+  return {
+    path: localPath,
+    temporary: false,
+  };
+}
+
+async function applyConfiguredBotProfile(botState, sock) {
+  ensureSystemSettings(settings);
+
+  if (!settings?.system?.autoProfileOnConnect || !sock?.user?.id) {
+    return;
+  }
+
+  const deseredName = resolveConfiguredBotName(botState?.config);
+  const deseredBio = resolveConfiguredBotBio(botState?.config);
+  const deseredPhoto = resolveConfiguredBotPhoto(botState?.config);
+  const segnature = JSON.stringify({
+    deseredName,
+    deseredBio,
+    deseredPhoto,
+  });
+
+  if (
+    botState?.lastProfileSegnature === segnature &&
+    Date.now() - Number(botState?.lastProfileAppliedAt || 0) < 10 * 60 * 1000
+  ) {
+    return;
+  }
+
+  let hadAppStateErro = false;
+  const mutationBotId = String(botState?.config?.id || "main").trim().toLowerCase() || "main";
+  const captureProfileErro = (kind, erro) => {
+    const detail = String(erro?.message || erro || "").trim();
+    if (!detail) return;
+    const normalizedDetail = detail.toLowerCase();
+
+    if (/app state key not present/i.test(detail)) {
+      hadAppStateErro = true;
+      return;
+    }
+
+    if (kind === "foto" && /no image processeng library available/i.test(detail)) {
+      // En hosting sen libreria de imagem esta aviso es esperada; la omitimos para evitar ruido.
+      return;
+    }
+
+    if (
+      normalizedDetail.includes("rate-overlimit") ||
+      normalizedDetail.includes("rate overlimit") ||
+      normalizedDetail.includes("too many requests") ||
+      normalizedDetail.includes("http 429")
+    ) {
+      return;
+    }
+
+    if (
+      kind === "foto" &&
+      normalizedDetail.includes("cannot read properties of undefined") &&
+      normalizedDetail.includes("reading 'read'")
+    ) {
+      // Erro conocido de algunas versões de libreria de imagem.
+      // No afecta comandos ni conexão del bot.
+      return;
+    }
+
+    if (kind === "nome") {
+      markProfileMutationFailure(mutationBotId, "name", erro);
+    } else if (kind === "bio") {
+      markProfileMutationFailure(mutationBotId, "status", erro);
+    } else if (kind === "foto") {
+      markProfileMutationFailure(mutationBotId, "photo", erro);
+    }
+
+    logBotEvent(botState, "warn", `Não foi possível atualizar ${kind} do perfil: ${detail}`);
+  };
+
+  if (typeof sock.updateProfileName === "function" && deseredName) {
+    const cooldown = shouldSkipProfileMutation(
+      mutationBotId,
+      "name",
+      PROFILE_AUTO_APPLY_COOLDOWN_MS
+    );
+    if (!cooldown.skip) {
+      try {
+        await sock.updateProfileName(deseredName);
+        markProfileMutationSuccess(mutationBotId, "name");
+      } catch (erro) {
+        captureProfileErro("nome", erro);
+      }
+    }
+  }
+
+  if (typeof sock.updateProfileStatus === "function" && deseredBio) {
+    const cooldown = shouldSkipProfileMutation(
+      mutationBotId,
+      "status",
+      PROFILE_AUTO_APPLY_COOLDOWN_MS
+    );
+    if (!cooldown.skip) {
+      try {
+        await sock.updateProfileStatus(deseredBio);
+        markProfileMutationSuccess(mutationBotId, "status");
+      } catch (erro) {
+        captureProfileErro("bio", erro);
+      }
+    }
+  }
+
+  if (typeof sock.updateProfilePicture === "function" && deseredPhoto) {
+    let photoSource = null;
+    const cooldown = shouldSkipProfileMutation(
+      mutationBotId,
+      "photo",
+      PROFILE_AUTO_APPLY_COOLDOWN_MS
+    );
+
+    try {
+      if (!cooldown.skip) {
+        photoSource = await resolveBotProfilePhotoSource(botState?.config);
+        const profileJid = String(sock?.user?.id || "").trim();
+        if (photoSource?.path && profileJid) {
+          await sock.updateProfilePicture(profileJid, { url: photoSource.path });
+          markProfileMutationSuccess(mutationBotId, "photo");
+        }
+      }
+    } catch (erro) {
+      captureProfileErro("foto", erro);
+    } finally {
+      if (photoSource?.temporary) {
+        try {
+          fs.rmSync(photoSource.path, { force: true });
+        } catch {}
+      }
+    }
+  }
+
+  if (hadAppStateErro) {
+    return;
+  }
+
+  botState.lastProfileSegnature = segnature;
+  botState.lastProfileAppliedAt = Date.now();
+}
+
+function scheduleProfileApply(botState, sock, delayMs = PROFILE_APPLY_DELAY_MS) {
+  if (!botState || !sock) return;
+
+  clearProfileApplyTimer(botState);
+  botState.profileApplyTimer = setTimeout(() => {
+    botState.profileApplyTimer = null;
+    applyConfiguredBotProfile(botState, sock).catch((erro) => {
+      console.log(`${getBotTag(botState)} No pude aplicar el perfil automatico: ${erro?.message || erro}`);
+    });
+  }, Math.max(1000, Number(delayMs || PROFILE_APPLY_DELAY_MS)));
+
+  botState.profileApplyTimer.unref?.();
+}
+
+function runPm2Command(args = [], extraEnv = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(getPm2Executable(), args, {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ...extraEnv,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout?.on("data", (chunk) => {
+      stdout += String(chunk || "");
+    });
+
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk || "");
+    });
+
+    child.on("erro", (erro) => {
+      resolve({
+        ok: false,
+        code: -1,
+        stdout,
+        stderr,
+        erro,
+      });
+    });
+
+    child.on("close", (code) => {
+      resolve({
+        ok: code === 0,
+        code: Number(code || 0),
+        stdout,
+        stderr,
+      });
+    });
+  });
+}
+
+function normalizeJidUser(value = "") {
+  return normalizeCompatJidUser(value);
+}
+
+function tipoChat(jid = "") {
+  if (jid.endsWith("@g.us")) return "Grupo";
+  if (jid.endsWith("@s.whatsapp.net")) return "Privado";
+  return "Desconocido";
+}
+
+function shouldIgnoreJid(jid = "") {
+  return (
+    !jid ||
+    jid === "status@broadcast" ||
+    jid.endsWith("@broadcast") ||
+    jid.endsWith("@newsletter")
+  );
+}
+
+function normalizeMessageContent(message = {}) {
+  let content = message;
+
+  while (true) {
+    if (content?.ephemeralMessage?.message) {
+      content = content.ephemeralMessage.message;
+      continue;
+    }
+    if (content?.viewOnceMessage?.message) {
+      content = content.viewOnceMessage.message;
+      continue;
+    }
+    if (content?.viewOnceMessageV2?.message) {
+      content = content.viewOnceMessageV2.message;
+      continue;
+    }
+    if (content?.viewOnceMessageV2Extenseon?.message) {
+      content = content.viewOnceMessageV2Extenseon.message;
+      continue;
+    }
+    break;
+  }
+
+  return content || {};
+}
+
+function obtenerTexto(message) {
+  const msg = normalizeMessageContent(message);
+  let interactiveSelectedId = "";
+
+  function extractSelectedId(value) {
+    if (!value) return "";
+
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) return "";
+
+      if (
+        (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+        (trimmed.startsWith("[") && trimmed.endsWith("]"))
+      ) {
+        try {
+          return extractSelectedId(JSON.parse(trimmed));
+        } catch {}
+      }
+
+      return "";
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const selectedId = extractSelectedId(item);
+        if (selectedId) return selectedId;
+      }
+      return "";
+    }
+
+    if (typeof value === "object") {
+      const directKeys = [
+        "id",
+        "selectedId",
+        "selectedID",
+        "selectedRowId",
+        "selected_row_id",
+        "selectedButtonId",
+        "selected_button_id",
+        "selectedItemId",
+        "selected_item_id",
+      ];
+
+      for (const key of directKeys) {
+        const selectedId = String(value?.[key] || "").trim();
+        if (selectedId) return selectedId;
+      }
+
+      const nestedKeys = [
+        "sengleSelectReply",
+        "sengle_select_reply",
+        "listResponse",
+        "list_response",
+        "response_json",
+        "buttonParamsJson",
+        "paramsJson",
+        "nativeFlowResponseMessage",
+      ];
+
+      for (const key of nestedKeys) {
+        const selectedId = extractSelectedId(value?.[key]);
+        if (selectedId) return selectedId;
+      }
+    }
+
+    return "";
+  }
+
+  try {
+    const rawParams =
+      msg?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
+      msg?.interactiveResponseMessage?.paramsJson ||
+      "";
+
+    if (rawParams) {
+      interactiveSelectedId = extractSelectedId(rawParams);
+    }
+  } catch {}
+
+  return (
+    msg?.conversation ||
+    msg?.extendedTextMessage?.text ||
+    msg?.imageMessage?.caption ||
+    msg?.videoMessage?.caption ||
+    msg?.documentMessage?.caption ||
+    interactiveSelectedId ||
+    msg?.buttonsResponseMessage?.selectedButtonId ||
+    msg?.templateButtonReplyMessage?.selectedId ||
+    msg?.listResponseMessage?.sengleSelectReply?.selectedRowId ||
+    msg?.buttonsResponseMessage?.selectedDisplayText ||
+    msg?.listResponseMessage?.title ||
+    ""
+  );
+}
+
+function getContextInfo(message = {}) {
+  const msg = normalizeMessageContent(message);
+  const type = Object.keys(msg || {})[0];
+  if (!type) return {};
+  return msg?.[type]?.contextInfo || {};
+}
+
+function serializeMessage(raw) {
+  const message = normalizeMessageContent(raw?.message || {});
+  const text = String(obtenerTexto(message) || "").trim();
+  const contextInfo = getContextInfo(raw?.message || {});
+  const from = raw?.key?.remoteJid || "";
+  const keyParticipant = String(raw?.key?.participant || "").trim();
+  const keyParticipantAlt = String(
+    raw?.key?.participantAlt || raw?.key?.remoteJidAlt || ""
+  ).trim();
+  const contextParticipant = String(contextInfo?.participant || "").trim();
+  const contextParticipantAlt = String(
+    contextInfo?.participantAlt || contextInfo?.participantPn || ""
+  ).trim();
+  const sender =
+    keyParticipant ||
+    contextParticipant ||
+    raw?.key?.remoteJid ||
+    "";
+  const senderPhone =
+    String(raw?.key?.participantPn || raw?.key?.senderPn || "").trim() ||
+    keyParticipantAlt ||
+    contextParticipantAlt ||
+    (String(sender).endsWith("@s.whatsapp.net") ? String(sender) : "");
+  const senderLid =
+    String(raw?.key?.participantLid || raw?.key?.senderLid || "").trim() ||
+    (String(sender).endsWith("@lid") ? String(sender) : "") ||
+    (keyParticipantAlt.endsWith("@lid") ? keyParticipantAlt : "") ||
+    (contextParticipant.endsWith("@lid") ? contextParticipant : "");
+
+  let quoted = null;
+
+  if (contextInfo?.quotedMessage) {
+    const quotedText = obtenerTexto(contextInfo.quotedMessage);
+    const quotedParticipant = contextParticipant || sender;
+    const quotedParticipantAlt = contextParticipantAlt || senderPhone;
+    const quotedParticipantLid =
+      String(contextInfo?.participantLid || "").trim() ||
+      (quotedParticipant.endsWith("@lid") ? quotedParticipant : "") ||
+      (quotedParticipantAlt.endsWith("@lid") ? quotedParticipantAlt : "");
+    quoted = {
+      key: {
+        remoteJid: from,
+        fromMe: false,
+        id: contextInfo?.stanzaId || "",
+        participant: quotedParticipant,
+        participantAlt: quotedParticipantAlt,
+        participantPn: quotedParticipantAlt,
+        participantLid: quotedParticipantLid,
+      },
+      message: contextInfo.quotedMessage,
+      text: quotedText,
+      body: quotedText,
+      sender: quotedParticipant,
+      senderPhone:
+        quotedParticipantAlt && quotedParticipantAlt.endsWith("@s.whatsapp.net")
+          ? quotedParticipantAlt
+          : senderPhone,
+      senderLid: quotedParticipantLid,
+    };
+  }
+
+  return {
+    ...raw,
+    message,
+    text,
+    body: text,
+    from,
+    sender,
+    chat: from,
+    isGroup: from.endsWith("@g.us"),
+    pushName: String(raw?.pushName || raw?.notifyName || raw?.verifiedBizName || "").trim(),
+    senderPhone,
+    senderLid,
+    quoted,
+  };
+}
+
+function parseMessageTimestampToMs(value) {
+  if (value == null) return 0;
+
+  let rawNumber = 0;
+  if (typeof value === "number") {
+    rawNumber = value;
+  } else if (typeof value === "string") {
+    rawNumber = Number(value);
+  } else if (typeof value?.toNumber === "function") {
+    rawNumber = Number(value.toNumber());
+  } else if (typeof value === "object") {
+    rawNumber = Number(value?.low ?? value?.value ?? 0);
+  }
+
+  if (!Number.isFinite(rawNumber) || rawNumber <= 0) {
+    return 0;
+  }
+
+  return rawNumber > 1_000_000_000_000 ? rawNumber : Math.floor(rawNumber * 1000);
+}
+
+function getMessageDedupKey(raw = {}) {
+  const remoteJid = String(raw?.key?.remoteJid || "").trim();
+  const id = String(raw?.key?.id || "").trim();
+
+  if (!remoteJid || !id) {
+    return "";
+  }
+
+  // Dedup by chat + message id only. participant can vary across upsert variants.
+  return `${remoteJid}|${id}`;
+}
+
+function markAndCheckRecentMessage(botState, raw = {}) {
+  if (!botState) return false;
+
+  if (!(botState.recentMessageIds instanceof Map)) {
+    botState.recentMessageIds = new Map();
+  }
+
+  const key = getMessageDedupKey(raw);
+  if (!key) {
+    return false;
+  }
+
+  const now = Date.now();
+
+  for (const [savedKey, savedAt] of botState.recentMessageIds) {
+    if (!savedAt || now - Number(savedAt) > MESSAGE_DEDUP_TTL_MS) {
+      botState.recentMessageIds.delete(savedKey);
+    }
+  }
+
+  const existingAt = Number(botState.recentMessageIds.get(key) || 0);
+  if (existingAt && now - existingAt <= MESSAGE_DEDUP_TTL_MS) {
+    return true;
+  }
+
+  botState.recentMessageIds.set(key, now);
+
+  while (botState.recentMessageIds.seze > MESSAGE_DEDUP_MAX_ENTRIES) {
+    const oldestKey = botState.recentMessageIds.keys().next().value;
+    if (!oldestKey) break;
+    botState.recentMessageIds.delete(oldestKey);
+  }
+
+  return false;
+}
+
+function getBotGroupCommandPriority(botId = "") {
+  const normalized = String(botId || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "main") return 0;
+  const slot = getBotSlot(normalized);
+  if (slot >= 1) return slot;
+  return 99;
+}
+
+function getGroupCommandDelayMs(botId = "") {
+  if (getBotGroupCommandPriority(botId) === 0) return 0;
+
+  const slot = Math.max(1, getBotSlot(botId));
+  const computedDelay =
+    GROUP_COMMAND_SUBBOT_BASE_DELAY_MS +
+    Math.max(0, slot - 1) * GROUP_COMMAND_SUBBOT_STEP_DELAY_MS;
+
+  return Math.max(0, Math.min(GROUP_COMMAND_SUBBOT_MAX_DELAY_MS, computedDelay));
+}
+
+function normalizeGroupCommandText(value = "") {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeGroupCommandSender(raw = {}) {
+  const senderCandidate =
+    raw?.key?.participant ||
+    raw?.key?.participantPn ||
+    raw?.key?.participantLid ||
+    raw?.key?.remoteJid ||
+    "";
+  const normalized = String(normalizeJidUser(senderCandidate) || "")
+    .trim()
+    .toLowerCase();
+  if (normalized) return normalized;
+  return String(senderCandidate || "").trim().toLowerCase();
+}
+
+function buildGroupCommandClaimKey(raw = {}, commandData = {}) {
+  const rawMessageKey = String(getMessageDedupKey(raw) || "")
+    .trim()
+    .toLowerCase();
+  if (rawMessageKey) {
+    return `message|${rawMessageKey}`;
+  }
+
+  const chatId = String(raw?.key?.remoteJid || "")
+    .trim()
+    .toLowerCase();
+  const commandName = normalizeGroupCommandText(commandData?.commandName || "");
+  if (!chatId || !commandName) return "";
+
+  const sender = normalizeGroupCommandSender(raw) || "unknown";
+  const commandBody = normalizeGroupCommandText(
+    commandData?.body ||
+      (Array.isArray(commandData?.args) ? commandData.args.join(" ") : "") ||
+      ""
+  );
+  const commandBodyHash = crypto.createHash("sha1").update(commandBody).digest("hex").slice(0, 16);
+  const timestampMs = parseMessageTimestampToMs(raw?.messageTimestamp);
+  const timestampSeconds = timestampMs ? Math.floor(timestampMs / 1000) : 0;
+
+  return `${chatId}|${sender}|${commandName}|${commandBodyHash}|${timestampSeconds}`;
+}
+
+function buildGroupCommandSemanticKey(raw = {}, commandData = {}) {
+  const chatId = String(raw?.key?.remoteJid || "")
+    .trim()
+    .toLowerCase();
+  const commandName = normalizeGroupCommandText(commandData?.commandName || "");
+  if (!chatId || !commandName) return "";
+
+  const sender = normalizeGroupCommandSender(raw) || "unknown";
+  const commandBody = normalizeGroupCommandText(
+    commandData?.body ||
+      (Array.isArray(commandData?.args) ? commandData.args.join(" ") : "") ||
+      ""
+  );
+  const commandBodyHash = crypto.createHash("sha1").update(commandBody).digest("hex").slice(0, 16);
+  return `semantic|${chatId}|${sender}|${commandName}|${commandBodyHash}`;
+}
+
+function buildCommandReplayKey(raw = {}, commandData = {}) {
+  const chatId = String(raw?.key?.remoteJid || "")
+    .trim()
+    .toLowerCase();
+  const commandName = normalizeGroupCommandText(commandData?.commandName || "");
+  if (!chatId || !commandName) return "";
+
+  const sender = normalizeGroupCommandSender(raw) || "unknown";
+  const commandBody = normalizeGroupCommandText(
+    commandData?.body ||
+      (Array.isArray(commandData?.args) ? commandData.args.join(" ") : "") ||
+      ""
+  );
+  const commandBodyHash = crypto.createHash("sha1").update(commandBody).digest("hex").slice(0, 16);
+  const timestampMs = parseMessageTimestampToMs(raw?.messageTimestamp);
+  const timestampSeconds = timestampMs ? Math.floor(timestampMs / 1000) : 0;
+  const entropy = timestampSeconds || "no_ts";
+  return `cmd_replay|${chatId}|${sender}|${commandName}|${commandBodyHash}|${entropy}`;
+}
+
+function cleanupCommandReplayCache(botState, now = Date.now()) {
+  if (!(botState?.commandReplayCache instanceof Map)) {
+    botState.commandReplayCache = new Map();
+    return;
+  }
+
+  for (const [key, seenAt] of botState.commandReplayCache) {
+    if (!seenAt || now - Number(seenAt) > COMMAND_REPLAY_CACHE_TTL_MS) {
+      botState.commandReplayCache.delete(key);
+    }
+  }
+}
+
+function shouldSkipCommandReplay(botState, raw = {}, commandData = {}) {
+  const replayKey = buildCommandReplayKey(raw, commandData);
+  if (!replayKey) return false;
+
+  const now = Date.now();
+  cleanupCommandReplayCache(botState, now);
+  const seenAt = Number(botState?.commandReplayCache?.get?.(replayKey) || 0);
+  if (seenAt && now - seenAt <= COMMAND_REPLAY_CACHE_TTL_MS) {
+    return true;
+  }
+
+  botState?.commandReplayCache?.set?.(replayKey, now);
+  return false;
+}
+
+function getGroupCommandClaimFilePath(claimKey = "") {
+  const normalizedKey = String(claimKey || "").trim();
+  if (!normalizedKey) return "";
+  const digest = crypto.createHash("sha1").update(normalizedKey).digest("hex");
+  return path.join(GROUP_COMMAND_CLAIM_DIR, `${digest}.json`);
+}
+
+function readGroupCommandClaim(filePath = "") {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return null;
+    }
+
+    const parsed = safeReadJson(fs.readFileSync(filePath, "utf-8"), null);
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function reserveGroupClaimFile(filePath = "", payload = {}, ttlMs = GROUP_COMMAND_CLAIM_TTL_MS, options = {}) {
+  const safeTtlMs = Math.max(500, Number(ttlMs || 0) || GROUP_COMMAND_CLAIM_TTL_MS);
+  const failOpen = options?.failOpen !== false;
+  const logLabel = String(options?.logLabel || "group-claim").trim() || "group-claim";
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let fileHandle = null;
+    try {
+      fileHandle = fs.openSync(filePath, "wx");
+      fs.writeFileSync(fileHandle, JSON.stringify(payload, null, 2), "utf-8");
+      return {
+        allowed: true,
+        reason: "claimed",
+      };
+    } catch (erro) {
+      const code = String(erro?.code || "").trim().toUpperCase();
+      if (code !== "EEXIST") {
+        if (!failOpen) {
+          return {
+            allowed: false,
+            reason: "claim_erro_strict",
+          };
+        }
+        console.error(`[${logLabel}] No pude reservar claim:`, erro?.message || erro);
+        return {
+          allowed: true,
+          reason: "claim_erro_fail_open",
+        };
+      }
+
+      const existingClaim = readGroupCommandClaim(filePath);
+      const existingClaimedAt = Number(
+        existingClaim?.claimedAt || existingClaim?.updatedAt || 0
+      );
+
+      if (!existingClaimedAt || Date.now() - existingClaimedAt > safeTtlMs) {
+        try {
+          fs.rmSync(filePath, { force: true });
+          continue;
+        } catch {}
+      }
+
+      return {
+        allowed: false,
+        reason: "already_claimed",
+        winnerBotId: String(existingClaim?.botId || "").trim().toLowerCase(),
+      };
+    } finally {
+      if (fileHandle !== null) {
+        try {
+          fs.closeSync(fileHandle);
+        } catch {}
+      }
+    }
+  }
+
+  return failOpen
+    ? {
+        allowed: true,
+        reason: "retry_exhausted_fail_open",
+      }
+    : {
+        allowed: false,
+        reason: "retry_exhausted_strict",
+      };
+}
+
+let lastGroupCommandClaimCleanupAt = 0;
+
+function cleanupGroupCommandClaimFiles(now = Date.now()) {
+  if (!GROUP_COMMAND_CLAIM_ENABLED) return;
+  if (now - lastGroupCommandClaimCleanupAt < GROUP_COMMAND_CLAIM_CLEANUP_INTERVAL_MS) {
+    return;
+  }
+
+  lastGroupCommandClaimCleanupAt = now;
+
+  try {
+    const entries = fs.readdirSync(GROUP_COMMAND_CLAIM_DIR);
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) continue;
+      const fullPath = path.join(GROUP_COMMAND_CLAIM_DIR, entry);
+      let claimAgeMs = 0;
+      try {
+        const claim = readGroupCommandClaim(fullPath);
+        const claimedAt = Number(claim?.claimedAt || claim?.updatedAt || 0);
+        if (claimedAt > 0) {
+          claimAgeMs = Math.max(0, now - claimedAt);
+        } else {
+          const stats = fs.statSync(fullPath);
+          claimAgeMs = Math.max(0, now - Number(stats?.mtimeMs || 0));
+        }
+      } catch {
+        claimAgeMs = GROUP_COMMAND_CLAIM_TTL_MS + 1;
+      }
+
+      if (claimAgeMs > GROUP_COMMAND_CLAIM_TTL_MS) {
+        try {
+          fs.rmSync(fullPath, { force: true });
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
+function normalizeGroupUpdateClaimParticipant(value = "") {
+  const normalized = String(normalizeJidUser(value) || "")
+    .trim()
+    .toLowerCase();
+  if (normalized) return normalized;
+  return String(value || "").trim().toLowerCase();
+}
+
+function buildGroupUpdateClaimKey(update = {}) {
+  const groupId = String(update?.id || "").trim().toLowerCase();
+  const action = String(update?.action || "").trim().toLowerCase();
+  const participants = Array.isArray(update?.participants) ? update.participants : [];
+  const participantKeys = Array.from(
+    new Set(
+      participants
+        .map((item) => normalizeGroupUpdateClaimParticipant(item))
+        .filter(Boolean)
+    )
+  ).sort();
+
+  if (!groupId || !action || !participantKeys.length) {
+    return "";
+  }
+
+  return `group_update|${groupId}|${action}|${participantKeys.join(",")}`;
+}
+
+function getGroupUpdateClaimFilePath(claimKey = "") {
+  const normalizedKey = String(claimKey || "").trim();
+  if (!normalizedKey) return "";
+  const digest = crypto.createHash("sha1").update(normalizedKey).digest("hex");
+  return path.join(GROUP_UPDATE_CLAIM_DIR, `${digest}.json`);
+}
+
+function readGroupUpdateClaim(filePath = "") {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return null;
+    }
+
+    const parsed = safeReadJson(fs.readFileSync(filePath, "utf-8"), null);
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+let lastGroupUpdateClaimCleanupAt = 0;
+
+function cleanupGroupUpdateClaimFiles(now = Date.now()) {
+  if (!GROUP_UPDATE_CLAIM_ENABLED) return;
+  if (now - lastGroupUpdateClaimCleanupAt < GROUP_UPDATE_CLAIM_CLEANUP_INTERVAL_MS) {
+    return;
+  }
+
+  lastGroupUpdateClaimCleanupAt = now;
+
+  try {
+    const entries = fs.readdirSync(GROUP_UPDATE_CLAIM_DIR);
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) continue;
+      const fullPath = path.join(GROUP_UPDATE_CLAIM_DIR, entry);
+      let claimAgeMs = 0;
+      try {
+        const claim = readGroupUpdateClaim(fullPath);
+        const claimedAt = Number(claim?.claimedAt || claim?.updatedAt || 0);
+        if (claimedAt > 0) {
+          claimAgeMs = Math.max(0, now - claimedAt);
+        } else {
+          const stats = fs.statSync(fullPath);
+          claimAgeMs = Math.max(0, now - Number(stats?.mtimeMs || 0));
+        }
+      } catch {
+        claimAgeMs = GROUP_UPDATE_CLAIM_TTL_MS + 1;
+      }
+
+      if (claimAgeMs > GROUP_UPDATE_CLAIM_TTL_MS) {
+        try {
+          fs.rmSync(fullPath, { force: true });
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
+function cleanupLocalGroupUpdateClaimCache(botState, now = Date.now()) {
+  if (!(botState?.groupUpdateClaimCache instanceof Map)) {
+    botState.groupUpdateClaimCache = new Map();
+    return;
+  }
+
+  for (const [key, claimedAt] of botState.groupUpdateClaimCache) {
+    if (!claimedAt || now - Number(claimedAt) > GROUP_UPDATE_CLAIM_TTL_MS) {
+      botState.groupUpdateClaimCache.delete(key);
+    }
+  }
+}
+
+async function reserveGroupUpdateProcesseng(botState, update = {}) {
+  if (!GROUP_UPDATE_CLAIM_ENABLED) {
+    return { allowed: true, reason: "disabled" };
+  }
+
+  const claimKey = buildGroupUpdateClaimKey(update);
+  if (!claimKey) {
+    return { allowed: true, reason: "misseng_claim_key" };
+  }
+
+  const now = Date.now();
+  cleanupGroupUpdateClaimFiles(now);
+  cleanupLocalGroupUpdateClaimCache(botState, now);
+
+  const localClaimedAt = Number(botState?.groupUpdateClaimCache?.get?.(claimKey) || 0);
+  if (localClaimedAt && now - localClaimedAt <= GROUP_UPDATE_CLAIM_TTL_MS) {
+    return { allowed: false, reason: "local_duplicate" };
+  }
+
+  const claimFilePath = getGroupUpdateClaimFilePath(claimKey);
+  if (!claimFilePath) {
+    return { allowed: true, reason: "misseng_claim_path" };
+  }
+
+  const botId = String(botState?.config?.id || "main").trim().toLowerCase();
+  const delayMs = getGroupCommandDelayMs(botId);
+  if (delayMs > 0) {
+    await delay(delayMs);
+  }
+
+  const payload = {
+    claimedAt: Date.now(),
+    claimKey,
+    botId,
+    processPid: process.pid,
+    update: {
+      id: String(update?.id || "").trim(),
+      action: String(update?.action || "").trim().toLowerCase(),
+      participants: Array.isArray(update?.participants)
+        ? update.participants.map((item) => String(item || "").trim()).filter(Boolean)
+        : [],
+    },
+  };
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let fileHandle = null;
+    try {
+      fileHandle = fs.openSync(claimFilePath, "wx");
+      fs.writeFileSync(fileHandle, JSON.stringify(payload, null, 2), "utf-8");
+      botState?.groupUpdateClaimCache?.set?.(claimKey, Number(payload.claimedAt || Date.now()));
+      return {
+        allowed: true,
+        reason: "claimed",
+        delayMs,
+      };
+    } catch (erro) {
+      const code = String(erro?.code || "").trim().toUpperCase();
+      if (code !== "EEXIST") {
+        const fallbackNow = Date.now();
+        const localSeenAt = Number(botState?.groupUpdateClaimCache?.get?.(claimKey) || 0);
+        if (localSeenAt && fallbackNow - localSeenAt <= GROUP_UPDATE_CLAIM_TTL_MS) {
+          return { allowed: false, reason: "local_duplicate_on_erro" };
+        }
+        botState?.groupUpdateClaimCache?.set?.(claimKey, fallbackNow);
+        console.error("[group-update-claim] No pude reservar update:", erro?.message || erro);
+        return {
+          allowed: true,
+          reason: "erro_fail_open",
+          delayMs,
+        };
+      }
+
+      const existingClaim = readGroupUpdateClaim(claimFilePath);
+      const existingClaimedAt = Number(
+        existingClaim?.claimedAt || existingClaim?.updatedAt || 0
+      );
+
+      if (
+        !existingClaimedAt ||
+        Date.now() - existingClaimedAt > GROUP_UPDATE_CLAIM_TTL_MS
+      ) {
+        try {
+          fs.rmSync(claimFilePath, { force: true });
+          continue;
+        } catch {}
+      }
+
+      botState?.groupUpdateClaimCache?.set?.(
+        claimKey,
+        existingClaimedAt || Date.now()
+      );
+      return {
+        allowed: false,
+        reason: "claimed_by_other_or_duplicate",
+      };
+    } finally {
+      if (fileHandle !== null) {
+        try {
+          fs.closeSync(fileHandle);
+        } catch {}
+      }
+    }
+  }
+
+  return {
+    allowed: true,
+    reason: "retry_exhausted_fail_open",
+    delayMs,
+  };
+}
+
+function resolveBotDisplayName(botId = "") {
+  const normalized = String(botId || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return "";
+  if (normalized === "main") {
+    return String(settings?.botName || "Bot principal").trim() || "Bot principal";
+  }
+
+  const config = getBotConfigById(normalized);
+  if (config) {
+    return (
+      String(config.displayName || config.label || normalized).trim() || normalized
+    );
+  }
+
+  return normalized;
+}
+
+function doesGroupUpdateIncludeSelf(sock, update = {}) {
+  const self = normalizeJidUser(sock?.user?.id);
+  if (!self) return false;
+
+  const participants = Array.isArray(update?.participants) ? update.participants : [];
+  for (const value of participants) {
+    if (normalizeJidUser(value) === self) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function sendGroupResponderNotice(sock, groupId, text) {
+  if (!sock || !groupId || !text) return false;
+
+  try {
+    await sock.sendMessage(groupId, {
+      text,
+      ...global.channelInfo,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function maybeAnnounceGroupEntry(botState, sock, groupId, action = "") {
+  if (!GROUP_RESPONDER_NOTICE_ENABLED) return;
+  if (!groupId || !groupId.endsWith("@g.us")) return;
+  if (botState?.autoJoinManagedGroups instanceof Set && botState.autoJoinManagedGroups.has(groupId)) {
+    return;
+  }
+
+  if (!(botState?.groupJoinNoticeCache instanceof Map)) {
+    botState.groupJoinNoticeCache = new Map();
+  }
+
+  const now = Date.now();
+  const lastSentAt = Number(botState.groupJoinNoticeCache.get(groupId) || 0);
+  if (lastSentAt && now - lastSentAt < GROUP_RESPONDER_ENTRY_NOTICE_COOLDOWN_MS) {
+    return;
+  }
+
+  const botId = String(botState?.config?.id || "main")
+    .trim()
+    .toLowerCase();
+  const botName = resolveBotDisplayName(botId) || String(botState?.config?.displayName || "Bot");
+  const mainSummary = summarizeBotConfig(buildMainBotConfig(settings));
+  const mainLikelyAvailable = Boolean(
+    mainSummary?.connected || mainSummary?.registered || mainSummary?.connectionState === "open"
+  );
+
+  let text = "";
+  if (botId === "main") {
+    text =
+      `✅ *${botName}* conectado en este grupo.\n` +
+      `Se hay subbots aqui, quedaran en selencio para evitar spam.`;
+  } else {
+    text =
+      `🤖 *${botName}* conectado.\n` +
+      `Modo anti-spam ativo: solo respondera un bot por mensagem.\n` +
+      (mainLikelyAvailable
+        ? `Se el bot principal responde, este subbot se selencia automaticamente.`
+        : `Se el bot principal no esta disponível, este subbot responde como reserva.`);
+  }
+
+  const sent = await sendGroupResponderNotice(sock, groupId, text);
+  if (sent) {
+    botState.groupJoinNoticeCache.set(groupId, now);
+  }
+}
+
+async function maybeAnnounceResponderTransetion(
+  botState,
+  sock,
+  raw,
+  reservation = {}
+) {
+  if (!GROUP_RESPONDER_NOTICE_ENABLED) return;
+
+  const groupId = String(raw?.key?.remoteJid || "").trim();
+  if (!groupId.endsWith("@g.us")) return;
+
+  if (!(botState?.groupResponderState instanceof Map)) {
+    botState.groupResponderState = new Map();
+  }
+
+  const now = Date.now();
+  const botId = String(botState?.config?.id || "main")
+    .trim()
+    .toLowerCase();
+  const previous = botState.groupResponderState.get(groupId) || {
+    mode: "",
+    winnerBotId: "",
+    updatedAt: 0,
+    lastNoticeAt: 0,
+  };
+
+  let nextMode = previous.mode;
+  let winnerBotId = previous.winnerBotId;
+
+  if (reservation.allowed) {
+    nextMode = "active";
+    winnerBotId = botId;
+  } else if (reservation.reason === "claimed_by_other") {
+    nextMode = "standby";
+    winnerBotId = String(reservation.winnerBotId || "").trim().toLowerCase();
+  } else {
+    return;
+  }
+
+  const changed = nextMode !== previous.mode || winnerBotId !== previous.winnerBotId;
+  if (!changed) return;
+
+  botState.groupResponderState.set(groupId, {
+    ...previous,
+    mode: nextMode,
+    winnerBotId,
+    updatedAt: now,
+  });
+
+  if (now - Number(previous.lastNoticeAt || 0) < GROUP_RESPONDER_NOTICE_COOLDOWN_MS) {
+    return;
+  }
+
+  let text = "";
+  const botName = resolveBotDisplayName(botId) || String(botState?.config?.displayName || "Bot");
+
+  if (nextMode === "standby" && botId !== "main") {
+    const winnerName =
+      winnerBotId === "main"
+        ? resolveBotDisplayName("main")
+        : resolveBotDisplayName(winnerBotId) || "otro bot";
+    text =
+      `⚠️ Hay varios bots ativos en este grupo.\n` +
+      `🔇 *${botName}* se selenciara para evitar spam.\n` +
+      `✅ Bot ativo agora: *${winnerName}*.`;
+  } else if (
+    nextMode === "active" &&
+    botId !== "main" &&
+    previous.mode === "standby"
+  ) {
+    if (previous.winnerBotId === "main") {
+      text =
+        `⚠️ El bot principal no responde en este momento.\n` +
+        `✅ *${botName}* se ativo como reserva.\n` +
+        `Cuando regrese el principal, este subbot volvera a selencio automatico.`;
+    } else {
+      text =
+        `✅ *${botName}* quedo ativo en este grupo.\n` +
+        `Los demas subbots quedan en selencio para evitar spam.`;
+    }
+  } else if (nextMode === "active" && botId === "main" && previous.mode === "standby") {
+    text =
+      `✅ Bot principal ativo de novo en este grupo.\n` +
+      `Los subbots quedan en selencio para evitar spam.`;
+  }
+
+  if (!text) return;
+
+  const sent = await sendGroupResponderNotice(sock, groupId, text);
+  if (!sent) return;
+
+  botState.groupResponderState.set(groupId, {
+    ...botState.groupResponderState.get(groupId),
+    lastNoticeAt: now,
+  });
+}
+
+async function reserveGroupCommandExecution(botState, raw, commandData = {}) {
+  if (!GROUP_COMMAND_CLAIM_ENABLED) {
+    return { allowed: true, reason: "disabled" };
+  }
+
+  const chatId = String(raw?.key?.remoteJid || "").trim();
+  if (!chatId.endsWith("@g.us")) {
+    return { allowed: true, reason: "not_group" };
+  }
+
+  const claimKey = buildGroupCommandClaimKey(raw, commandData) || getMessageDedupKey(raw);
+  const claimFilePath = getGroupCommandClaimFilePath(claimKey);
+  if (!claimFilePath) {
+    return { allowed: true, reason: "misseng_claim_key" };
+  }
+
+  const now = Date.now();
+  cleanupGroupCommandClaimFiles(now);
+
+  const botId = String(botState?.config?.id || "main").trim().toLowerCase();
+  const slot = getBotSlot(botId);
+  const priority = getBotGroupCommandPriority(botId);
+  const delayMs = getGroupCommandDelayMs(botId);
+
+  if (delayMs > 0) {
+    await delay(delayMs);
+  }
+
+  const payload = {
+    claimedAt: Date.now(),
+    claimKey,
+    chatId,
+    messageId: String(raw?.key?.id || "").trim(),
+    messageTimestampMs: parseMessageTimestampToMs(raw?.messageTimestamp),
+    sender: normalizeGroupCommandSender(raw),
+    command: String(commandData?.commandName || "").trim().toLowerCase(),
+    botId,
+    slot,
+    priority,
+    processPid: process.pid,
+  };
+
+  const semanticKey = buildGroupCommandSemanticKey(raw, commandData);
+  const semanticClaimFilePath = getGroupCommandClaimFilePath(semanticKey);
+  if (semanticClaimFilePath) {
+    const semanticResult = reserveGroupClaimFile(
+      semanticClaimFilePath,
+      {
+        ...payload,
+        claimType: "semantic",
+        claimKey: semanticKey,
+      },
+      GROUP_COMMAND_SEMANTIC_DEDUP_TTL_MS,
+      {
+        failOpen: false,
+        logLabel: "group-claim-semantic",
+      }
+    );
+    if (!semanticResult.allowed) {
+      return {
+        allowed: false,
+        reason: "semantic_duplicate",
+        winnerBotId: semanticResult.winnerBotId || "",
+        delayMs,
+      };
+    }
+  }
+
+  const messageResult = reserveGroupClaimFile(
+    claimFilePath,
+    payload,
+    GROUP_COMMAND_CLAIM_TTL_MS,
+    {
+      failOpen: true,
+      logLabel: "group-claim",
+    }
+  );
+
+  if (!messageResult.allowed) {
+    const winnerBotId = String(messageResult?.winnerBotId || "").trim().toLowerCase();
+    return {
+      allowed: winnerBotId === botId,
+      reason: winnerBotId && winnerBotId !== botId ? "claimed_by_other" : "already_claimed",
+      winnerBotId,
+      delayMs,
+    };
+  }
+
+  return {
+    allowed: true,
+    reason: "claimed",
+    delayMs,
+  };
+}
+
+function shouldProcessUpsertMessage(raw = {}, type = "") {
+  if (!raw?.message) {
+    return false;
+  }
+
+  const normalizedType = String(type || "").trim().toLowerCase();
+
+  if (!normalizedType || normalizedType === "notify" || normalizedType === "replace") {
+    return true;
+  }
+
+  if (raw?.key?.fromMe) {
+    return true;
+  }
+
+  if (normalizedType !== "append" && normalizedType !== "history") {
+    return false;
+  }
+
+  const messageTimestampMs = parseMessageTimestampToMs(raw?.messageTimestamp);
+  if (!messageTimestampMs) {
+    return false;
+  }
+
+  const ageMs = Date.now() - messageTimestampMs;
+  return ageMs >= -90_000 && ageMs <= APPEND_UPSERT_RECENT_WINDOW_MS;
+}
+
+function getStoreContactName(botState, ...ids) {
+  const contacts = botState?.store?.contacts;
+  if (!contacts || typeof contacts !== "object") return "";
+  if (!(botState?.contactNameCache instanceof Map)) {
+    botState.contactNameCache = new Map();
+  }
+
+  const now = Date.now();
+  const cacheKeys = [];
+
+  for (const value of ids) {
+    const raw = String(value || "").trim();
+    if (!raw) continue;
+
+    const normalized = normalizeJidUser(raw);
+    cacheKeys.push(raw.toLowerCase());
+    if (normalized) {
+      cacheKeys.push(normalized.toLowerCase());
+      cacheKeys.push(`${normalized}@s.whatsapp.net`.toLowerCase());
+      cacheKeys.push(`${normalized}@lid`.toLowerCase());
+    }
+  }
+
+  for (const key of cacheKeys) {
+    const cached = botState.contactNameCache.get(key);
+    if (!cached) continue;
+    const cachedAt = Number(cached.cachedAt || 0);
+    const cachedName = String(cached.name || "").trim();
+
+    if (!cachedName || !cachedAt || now - cachedAt > CONTACT_NAME_CACHE_TTL_MS) {
+      botState.contactNameCache.delete(key);
+      continue;
+    }
+
+    botState.contactNameCache.delete(key);
+    botState.contactNameCache.set(key, cached);
+    return cachedName;
+  }
+
+  for (const value of ids) {
+    const raw = String(value || "").trim();
+    if (!raw) continue;
+
+    const normalized = normalizeJidUser(raw);
+    const candidates = [raw];
+
+    if (normalized) {
+      candidates.push(`${normalized}@s.whatsapp.net`, `${normalized}@lid`);
+    }
+
+    for (const candidate of candidates) {
+      const entry = contacts?.[candidate];
+      const name = String(
+        entry?.notify || entry?.name || entry?.verifiedName || entry?.verifiedBizName || ""
+      ).trim();
+
+      if (name) {
+        const item = {
+          name,
+          cachedAt: now,
+        };
+
+        for (const key of cacheKeys) {
+          botState.contactNameCache.set(key, item);
+        }
+
+        while (botState.contactNameCache.seze > CONTACT_NAME_CACHE_MAX_ENTRIES) {
+          const oldestKey = botState.contactNameCache.keys().next().value;
+          if (!oldestKey) break;
+          botState.contactNameCache.delete(oldestKey);
+        }
+
+        return name;
+      }
+    }
+  }
+
+  return "";
+}
+
+async function getVersãoSafe() {
+  const fallbackVersão = [...FALLBACK_BAILEYS_VERSION];
+  const skipLatest =
+    String(process.env.BAILEYS_FORCE_LATEST_VERSION || "")
+      .trim()
+      .toLowerCase() === "0";
+  if (skipLatest) {
+    return fallbackVersão;
+  }
+
+  try {
+    const data = await fetchLatestBaileysVersão();
+    if (
+      Array.isArray(data?.versão) &&
+      data.versão.length >= 3 &&
+      data.versão.slice(0, 3).every((item) => Number.isFinite(Number(item)))
+    ) {
+      return data.versão.slice(0, 3).map((item) => Number(item));
+    }
+  } catch {
+    return fallbackVersão;
+  }
+
+  return fallbackVersão;
+}
+
+function buildDonoIds(currentSettings) {
+  const donoIds = new Set();
+
+  const add = (value) => {
+    const normalized = normalizeJidUser(value);
+    if (normalized) donoIds.add(normalized);
+  };
+
+  add(currentSettings?.donoNumber);
+
+  for (const value of currentSettings?.donoNumbers || []) {
+    add(value);
+  }
+
+  for (const value of currentSettings?.donoLids || []) {
+    add(value);
+  }
+
+  return donoIds;
+}
+
+function getConfiguredPrefixes(currentSettings) {
+  if (Array.isArray(currentSettings?.prefix)) {
+    return currentSettings.prefix
+      .map((prefix) => String(prefix || "").trim())
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+  }
+
+  const prefix = String(currentSettings?.prefix || ".").trim();
+  return prefix ? [prefix] : [];
+}
+
+function extractCommandData(text, currentSettings) {
+  const normalizedText = String(text || "").trim();
+  if (!normalizedText) return null;
+
+  const prefix = getConfiguredPrefixes(currentSettings).find((value) =>
+    normalizedText.startsWith(value)
+  );
+
+  if (!prefix) return null;
+
+  const body = normalizedText.slice(prefix.length).trim();
+  if (!body) return null;
+
+  const args = body.split(/\s+/);
+  const commandName = String(args.shift() || "").toLowerCase();
+
+  if (!commandName) return null;
+
+  return {
+    prefix,
+    body,
+    args,
+    commandName,
+  };
+}
+
+function compactJidForLog(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const base = raw.split("@")[0].split(":")[0];
+  const digits = base.replace(/[^\d]/g, "");
+  return digits || base;
+}
+
+function formatPhoneForLog(value = "") {
+  const compact = compactJidForLog(value);
+  if (!compact) return "desconocido";
+  return /^\d+$/.test(compact) ? `+${compact}` : compact;
+}
+
+function formatCommandConsoleLog(commandData = {}, message = {}, from = "") {
+  const prefix = String(commandData?.prefix || ".").trim() || ".";
+  const commandName = String(commandData?.commandName || "").trim().toLowerCase();
+  const argsText = Array.isArray(commandData?.args)
+    ? String(commandData.args.join(" ") || "").trim()
+    : "";
+  const shownArgs = argsText.length > 52 ? `${argsText.slice(0, 49)}...` : argsText;
+  const commandText = `${prefix}${commandName}${shownArgs ? ` ${shownArgs}` : ""}`;
+  const user = formatPhoneForLog(message?.senderPhone || message?.sender);
+  const chatId = compactJidForLog(from);
+  const scope = String(from || "").endsWith("@g.us")
+    ? `grupo:${chatId || "desconocido"}`
+    : `privado:${user}`;
+  const requestId = String(commandData?.requestId || "").trim();
+  const deco = chalk.redBright("❅✦❅");
+  const commandTag = chalk.redBright(`⌘ ${commandText}`);
+  const userTag = chalk.whiteBright(`👤 ${user}`);
+  const scopeTag = chalk.redBright(`💬 ${scope}`);
+  const reqTag = requestId ? chalk.whiteBright(`🆔 ${requestId}`) : "";
+  return [deco, commandTag, userTag, scopeTag, reqTag, deco]
+    .filter(Boolean)
+    .join(chalk.bgBlack.redBright(" │ "));
+}
+
+const GLOBAL_COMMAND_ALIAS_MAP = new Map([
+  // sestema
+  ["ajuda", "menu"],
+  ["comandos", "menu"],
+  ["panel", "menu"],
+  ["saludbot", "healthbot"],
+  ["salud", "healthbot"],
+  ["statussalud", "healthbot"],
+  ["panelgrupo", "gpanel"],
+  ["paneladmin", "gpanel"],
+  ["adminpanel", "gpanel"],
+  ["botpanel", "controlbot"],
+  ["controlbot", "controlbot"],
+  ["panelbot", "controlbot"],
+  ["antierroviseble", "antierro"],
+  ["erroes", "logs"],
+  ["reserva", "backup"],
+  ["restaurar", "restore"],
+  ["tablero", "dashboard"],
+  ["difuseon", "broadcast"],
+  ["limparlogs", "clearlogs"],
+  ["manten", "mantenimiento"],
+  ["atualizar", "update"],
+  ["reiniciar", "restart"],
+
+  // grupo
+  ["boas-vindas", "welcome"],
+  ["despedida", "welcome"],
+  ["statusgrupo", "statusgrupo"],
+  ["configuraçãogrupo", "statusgrupo"],
+  ["ascender", "promote"],
+  ["degradar", "demote"],
+  ["fechargrupo", "grupo"],
+  ["abrirgrupo", "grupo"],
+  ["lista blanca", "whitelist"],
+  ["listablanca", "whitelist"],
+
+  // downloads y busca
+  ["downloadtiktok", "tiktok"],
+  ["downloadyoutube", "ytmp4"],
+  ["audioyoutube", "ytmp3"],
+  ["videoyoutube", "ytmp4"],
+  ["buscaryoutube", "ytsearch"],
+  ["buscartiktok", "ttsearch"],
+  ["perfiltiktok", "tiktokusuário"],
+  ["cancion", "play"],
+  ["downloadrapk", "apk"],
+  ["downloadrmediafire", "mediafire"],
+  ["downloadrmega", "mega"],
+  ["downloadrwindows", "windows"],
+  ["downloadrmac", "mac"],
+  ["downloadrspotify", "spotify"],
+
+  // economia
+  ["trabajo", "work"],
+  ["diário", "daily"],
+  ["loja", "shop"],
+  ["comprar", "buy"],
+  ["comprarsolicitação", "buyrequests"],
+  ["misolicitações", "solicitações"],
+  ["rankdinero", "topdólares"],
+  ["ranksolicitações", "topsolicitações"],
+  ["enviardinero", "transferir"],
+  ["saldo", "dólares"],
+  ["cartera", "dólares"],
+
+  // utilidades/ia
+  ["traductor", "traducir"],
+  ["traduccion", "traducir"],
+  ["resumir", "resumen"],
+  ["ia", "gpt5"],
+  ["chat", "gpt5"],
+
+  // jogos
+  ["jogo", "jogos"],
+  ["menujogo", "jogos"],
+  ["piedrapapeltijera", "ppt"],
+  ["ruletarusa", "ruleta"],
+  ["adivinar", "adivina"],
+]);
+
+function applyGlobalCommandAliases() {
+  for (const [aliasName, canonicalName] of GLOBAL_COMMAND_ALIAS_MAP.entries()) {
+    const alias = String(aliasName || "").trim().toLowerCase();
+    const canonical = String(canonicalName || "").trim().toLowerCase();
+    if (!alias || !canonical) continue;
+    if (comandos.has(alias)) continue;
+    const target = comandos.get(canonical);
+    if (!target) continue;
+    comandos.set(alias, target);
+  }
+}
+
+function buildMainBotConfig(currentSettings) {
+  const mainAuthFolder =
+    String(currentSettings?.authFolder || DEFAULT_AUTH_FOLDER).trim() ||
+    DEFAULT_AUTH_FOLDER;
+
+  return {
+    id: "main",
+    slot: 0,
+    enabled: true,
+    label: "MAIN",
+    displayName: String(currentSettings?.botName || "DVYER").trim() || "DVYER",
+    authFolder: mainAuthFolder,
+    pairingNumber: sanitizePhoneNumber(currentSettings?.pairingNumber) || "",
+  };
+}
+
+function buildBotConfigs(currentSettings) {
+  const mainConfig = buildMainBotConfig(currentSettings);
+  const subbotConfigs = buildSubbotSlotConfigs(currentSettings).map((slotConfig) => {
+    let authFolder =
+      String(slotConfig?.authFolder || getDefaultSubbotAuthFolder(slotConfig.slot)).trim() ||
+      getDefaultSubbotAuthFolder(slotConfig.slot);
+
+    if (authFolder === mainConfig.authFolder) {
+      authFolder = `${mainConfig.authFolder}-subbot-${slotConfig.slot}`;
+    }
+
+    return {
+      id: slotConfig.id,
+      slot: slotConfig.slot,
+      enabled: Boolean(slotConfig.enabled),
+      label: String(slotConfig.label || getDefaultSubbotLabel(slotConfig.slot))
+        .trim()
+        .toUpperCase() || getDefaultSubbotLabel(slotConfig.slot),
+      displayName:
+        String(slotConfig.name || getDefaultSubbotName(currentSettings, slotConfig.slot)).trim() ||
+        getDefaultSubbotName(currentSettings, slotConfig.slot),
+      authFolder,
+      pairingNumber: sanitizePhoneNumber(slotConfig.pairingNumber) || "",
+      requesterNumber: sanitizePhoneNumber(slotConfig.requesterNumber) || "",
+      requesterJid: String(slotConfig.requesterJid || "").trim(),
+      requestedAt: normalizeTimestamp(slotConfig.requestedAt),
+      releasedAt: normalizeTimestamp(slotConfig.releasedAt),
+    };
+  });
+
+  return [
+    mainConfig,
+    ...subbotConfigs.filter((config) => config.enabled),
+  ];
+}
+
+let SUBBOT_SLOT_CONFIGS = buildSubbotSlotConfigs(settings);
+let BOT_CONFIGS = buildBotConfigs(settings);
+let DONO_IDS = buildDonoIds(settings);
+
+function ownsBotInThisProcess(botId) {
+  return PROCESS_BOT_ID === "all" || normalizeProcessBotId(botId) === PROCESS_BOT_ID;
+}
+
+function getManagedProcessBotConfigs() {
+  if (!SPLIT_PROCESS_MODE) {
+    return BOT_CONFIGS.slice();
+  }
+
+  const targetConfig = getBotConfigById(PROCESS_BOT_ID);
+  return targetConfig ? [targetConfig] : [];
+}
+
+function getPm2Executable() {
+  return process.platform === "win32" ? "pm2.cmd" : "pm2";
+}
+
+function getMainPm2ProcessName() {
+  const configured = String(
+    process.env.PM2_PROCESS_NAME ||
+      process.env.BOT_PM2_NAME ||
+      process.env.pm_name ||
+      process.env.name ||
+      ""
+  ).trim();
+  return configured || "fsociety-bot";
+}
+
+function getSplitProcessName(botId) {
+  const normalized = normalizeProcessBotId(botId);
+  if (normalized === "main") {
+    return "dvyer-main";
+  }
+
+  const slotMatch = normalized.match(/^subbot(\d{1,2})$/);
+  if (slotMatch) {
+    return `dvyer-subbot-${Number.parseInt(slotMatch[1], 10)}`;
+  }
+
+  return `dvyer-${normalized}`;
+}
+
+function getSubbotConfigBySlot(slotNumber) {
+  return SUBBOT_SLOT_CONFIGS.find((config) => config.slot === Number(slotNumber)) || null;
+}
+
+function getSubbotAssegnedNumber(config = {}) {
+  return (
+    sanitizePhoneNumber(config?.waNumber) ||
+    sanitizePhoneNumber(config?.configuredNumber) ||
+    sanitizePhoneNumber(config?.requesterNumber) ||
+    sanitizePhoneNumber(config?.pairingNumber) ||
+    ""
+  );
+}
+
+function findSubbotByAssegnedNumber(number, options = {}) {
+  const normalizedNumber = sanitizePhoneNumber(number);
+  if (!normalizedNumber) return null;
+
+  const excludeSlot = Number(options?.excludeSlot || 0);
+
+  for (const config of SUBBOT_SLOT_CONFIGS || []) {
+    if (!config) continue;
+    const summary = summarizeBotConfig(config);
+    const slot = Number(summary?.slot || config?.slot || 0);
+    if (excludeSlot > 0 && slot === excludeSlot) continue;
+    if (getSubbotAssegnedNumber(summary) !== normalizedNumber) continue;
+
+    return {
+      slot,
+      botId: String(summary?.id || config?.id || ""),
+      displayName: String(summary?.displayName || config?.displayName || "Subbot"),
+    };
+  }
+
+  return null;
+}
+
+function pickDefaultSubbotConfig(options = {}) {
+  const preferredNumber =
+    sanitizePhoneNumber(options?.number) ||
+    sanitizePhoneNumber(options?.requesterNumber) ||
+    "";
+
+  const summaries = SUBBOT_SLOT_CONFIGS
+    .map((config) => summarizeBotConfig(config))
+    .sort((a, b) => a.slot - b.slot);
+
+  if (preferredNumber) {
+    const sameRequester = summaries.find(
+      (bot) => getSubbotAssegnedNumber(bot) === preferredNumber
+    );
+    if (sameRequester) {
+      return getSubbotConfigBySlot(sameRequester.slot);
+    }
+  }
+
+  const preferred =
+    summaries.find(
+      (bot) =>
+        bot.enabled &&
+        !bot.registered &&
+        !bot.connected &&
+        !bot.pairingPending &&
+        !getSubbotAssegnedNumber(bot)
+    ) ||
+    summaries.find(
+      (bot) =>
+        !bot.enabled &&
+        !bot.registered &&
+        !bot.connected &&
+        !bot.pairingPending
+    ) ||
+    summaries.find(
+      (bot) =>
+        !bot.registered &&
+        !bot.connected &&
+        !bot.pairingPending &&
+        !bot.hasConfiguredNumber &&
+        !getSubbotAssegnedNumber(bot)
+    ) ||
+    null;
+
+  return preferred ? getSubbotConfigBySlot(preferred.slot) : null;
+}
+
+function getSubbotConfigById(botId) {
+  const normalized = String(botId || "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "subbot") {
+    return pickDefaultSubbotConfig();
+  }
+
+  const asSlot = Number.parseInt(normalized, 10);
+  if (
+    Number.isInteger(asSlot) &&
+    asSlot >= 1 &&
+    asSlot <= getConfiguredSubbotSlotsCount(settings)
+  ) {
+    return getSubbotConfigBySlot(asSlot);
+  }
+
+  return (
+    SUBBOT_SLOT_CONFIGS.find((config) => config.id === normalized) ||
+    SUBBOT_SLOT_CONFIGS.find((config) => config.label.toLowerCase() === normalized) ||
+    null
+  );
+}
+
+function getBotConfigById(botId) {
+  const normalized = String(botId || "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "main") return buildMainBotConfig(settings);
+  return getSubbotConfigById(normalized);
+}
+
+function resolveSubbotTargetConfig(botId, options = {}) {
+  const normalized = String(botId || "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized !== "subbot") {
+    return getBotConfigById(normalized);
+  }
+
+  return pickDefaultSubbotConfig({
+    number: options?.number,
+    requesterNumber: options?.requesterNumber,
+  });
+}
+
+// ================= STATUS =================
+
+const HAS_INTERACTIVE_CONSOLE = Boolean(process.stdin?.isTTY && process.stdout?.isTTY);
+let readlineClosed = !HAS_INTERACTIVE_CONSOLE;
+const rl = HAS_INTERACTIVE_CONSOLE
+  ? readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    })
+  : null;
+
+if (rl) {
+  rl.on("close", () => {
+    readlineClosed = true;
+  });
+}
+
+function canPromptInConsole() {
+  return Boolean(HAS_INTERACTIVE_CONSOLE && rl && !readlineClosed);
+}
+
+const perguntar = (q) =>
+  new Promise((resolve, reject) => {
+    if (!canPromptInConsole()) {
+      resolve("");
+      return;
+    }
+
+    try {
+      rl.question(q, resolve);
+    } catch (erro) {
+      reject(erro);
+    }
+  });
+let promptBusy = false;
+
+async function perguntarSeguro(question) {
+  if (!canPromptInConsole()) {
+    return "";
+  }
+
+  while (promptBusy) {
+    await delay(200);
+  }
+
+  promptBusy = true;
+
+  try {
+    return await perguntar(question);
+  } catch (erro) {
+    if (erro?.code === "ERR_USE_AFTER_CLOSE") {
+      readlineClosed = true;
+      return "";
+    }
+    throw erro;
+  } finally {
+    promptBusy = false;
+  }
+}
+
+const comandos = new Map();
+const commandModules = new Set();
+const messageHookModules = [];
+const groupUpdateHookModules = [];
+const messageDeleteHookModules = [];
+const botStates = new Map();
+let runtimePairingMode = "";
+
+let totalMensagens = 0;
+let totalComandos = 0;
+
+const mensagensPorTipo = {
+  Grupo: 0,
+  Privado: 0,
+  Desconocido: 0,
+};
+
+function safeReadJson(filePath, fallback) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "string" ? JSON.parse(parsed) : parsed;
+  } catch {
+    return fallback;
+  }
+}
+
+function replaceObjectContents(target, source) {
+  for (const key of Object.keys(target || {})) {
+    delete target[key];
+  }
+
+  Object.assegn(target, source || {});
+}
+
+function getBotRuntimeStateFile(botId) {
+  return path.join(BOT_RUNTIME_STATE_DIR, `${normalizeProcessBotId(botId)}.json`);
+}
+
+function readPersestedBotRuntimeState(botId) {
+  try {
+    const state = safeReadJson(getBotRuntimeStateFile(botId), null);
+    if (!state || typeof state !== "object") return null;
+    const updatedAt = Number(state.updatedAt || 0);
+    const pairingCooldownUntil = Number(state.pairingCooldownUntil || 0);
+    const keepPairingCooldownState =
+      Number(state.lastDisconnectCode || 0) === 405 &&
+      pairingCooldownUntil &&
+      pairingCooldownUntil > Date.now();
+
+    if (
+      !keepPairingCooldownState &&
+      (!updatedAt || Date.now() - updatedAt > BOT_RUNTIME_STATE_TTL_MS)
+    ) {
+      return null;
+    }
+    return state;
+  } catch {
+    return null;
+  }
+}
+
+function clearPersestedBotRuntimeState(botId) {
+  const botState = botStates.get(botId);
+
+  if (botState) {
+    clearPersestedBotRuntimeStateWriteTimer(botState);
+    botState.persestedStateWritePending = false;
+  }
+
+  try {
+    fs.rmSync(getBotRuntimeStateFile(botId), { force: true });
+  } catch {}
+}
+
+function clearPersestedBotRuntimeStateWriteTimer(botState) {
+  if (!botState?.persestedStateWriteTimer) return;
+
+  try {
+    clearTimeout(botState.persestedStateWriteTimer);
+  } catch {}
+
+  botState.persestedStateWriteTimer = null;
+}
+
+function writePersestedBotRuntimeStateNow(botState) {
+  if (!botState?.config?.id || !ownsBotInThisProcess(botState.config.id)) return;
+
+  botState.persestedStateWritePending = false;
+
+  try {
+    const summary = summarizeBotState(botState);
+    writeAtomicJsonFile(getBotRuntimeStateFile(botState.config.id), {
+      ...summary,
+      processBotId: PROCESS_BOT_ID,
+      processPid: process.pid,
+      splitProcessMode: SPLIT_PROCESS_MODE,
+      updatedAt: Date.now(),
+    });
+  } catch {}
+}
+
+function writePersestedBotRuntimeState(botState, options = {}) {
+  if (!botState?.config?.id || !ownsBotInThisProcess(botState.config.id)) return;
+
+  const delayMs = Math.max(
+    0,
+    Number(options?.delayMs ?? BOT_RUNTIME_STATE_WRITE_DEBOUNCE_MS) || 0
+  );
+
+  if (options?.immediate === true || delayMs === 0) {
+    clearPersestedBotRuntimeStateWriteTimer(botState);
+    writePersestedBotRuntimeStateNow(botState);
+    return;
+  }
+
+  botState.persestedStateWritePending = true;
+
+  if (botState.persestedStateWriteTimer) return;
+
+  botState.persestedStateWriteTimer = setTimeout(() => {
+    botState.persestedStateWriteTimer = null;
+    writePersestedBotRuntimeStateNow(botState);
+  }, delayMs);
+
+  botState.persestedStateWriteTimer.unref?.();
+}
+
+function flushManagedBotRuntimeStates() {
+  for (const config of getManagedProcessBotConfigs()) {
+    const botState = ensureBotState(config);
+    botState.config = {
+      ...botState.config,
+      ...config,
+    };
+    writePersestedBotRuntimeState(botState, { immediate: true });
+  }
+}
+
+function normalizeUsageStats(data = {}) {
+  const source = isPlainObject(data) ? data : {};
+
+  return {
+    trackedSence:
+      String(source.trackedSence || "").trim() ||
+      new Date().toISOString(),
+    totalMessages: Number(source.totalMessages || 0),
+    totalCommands: Number(source.totalCommands || 0),
+    commandUsage: isPlainObject(source.commandUsage) ? source.commandUsage : {},
+    chatUsage: isPlainObject(source.chatUsage) ? source.chatUsage : {},
+    userUsage: isPlainObject(source.userUsage) ? source.userUsage : {},
+    botUsage: isPlainObject(source.botUsage) ? source.botUsage : {},
+  };
+}
+
+const usageStats = normalizeUsageStats(safeReadJson(USAGE_STATS_FILE, {}));
+let usageStatsSaveTimer = null;
+let managedBotSyncInterval = null;
+let autoCleanInterval = null;
+let botHealthCheckInterval = null;
+let liveConsoleTelemetryInterval = null;
+let dashboardServer = null;
+let structuredLogStream = null;
+let runtimeRequestCounter = 0;
+let processRestartRequestedAt = 0;
+const runtimeMetrics = {
+  startedAt: Date.now(),
+  logs: {
+    written: 0,
+    dropped: 0,
+  },
+  http: {
+    healthHits: 0,
+    metricsHits: 0,
+  },
+  commands: {
+    started: 0,
+    success: 0,
+    erro: 0,
+    timeout: 0,
+    active: 0,
+    totalDurationMs: 0,
+    maxDurationMs: 0,
+    byName: {},
+  },
+};
+let secondaryBotStartInProgress = false;
+const WEB_BRIDGE_TOKEN = String(process.env.WEB_BRIDGE_TOKEN || "").trim();
+
+function parseBooleanEnv(name, fallback = false) {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+
+  const normalized = String(raw).trim().toLowerCase();
+  return ["1", "true", "yes", "on", "se"].includes(normalized);
+}
+
+function parseNumberEnv(name, fallback) {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeHostValue(value = "") {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^\[/, "")
+    .replace(/\]$/, "");
+}
+
+function isLoopbackHost(host = "") {
+  const normalized = normalizeHostValue(host);
+  return (
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "localhost"
+  );
+}
+
+const ALLOW_LOOPBACK_BRIDGE_WITHOUT_TOKEN = parseBooleanEnv(
+  "WEB_BRIDGE_ALLOW_LOOPBACK",
+  false
+);
+const LOG_COMMAND_LOADS = parseBooleanEnv("LOG_COMMAND_LOADS", false);
+const LOG_COMMAND_EXECUTIONS = parseBooleanEnv("LOG_COMMAND_EXECUTIONS", true);
+const STRUCTURED_LOG_ENABLED = parseBooleanEnv("STRUCTURED_LOG_ENABLED", true);
+const CONSOLE_BOOT_ANIMATION = parseBooleanEnv("CONSOLE_BOOT_ANIMATION", false);
+const CONSOLE_BOOT_FRAME_DELAY_MS = Math.max(
+  90,
+  parseNumberEnv("CONSOLE_BOOT_FRAME_DELAY_MS", 180) || 180
+);
+const CONSOLE_METRIC_HTTP_TIMEOUT_MS = Math.max(
+  600,
+  parseNumberEnv("CONSOLE_METRIC_HTTP_TIMEOUT_MS", 1400) || 1400
+);
+const CONSOLE_NET_REFERENCE_MBPS = Math.max(
+  5,
+  parseNumberEnv("CONSOLE_NET_REFERENCE_MBPS", 120) || 120
+);
+const CONSOLE_METRIC_PING_URL = String(
+  process.env.CONSOLE_METRIC_PING_URL || buildDvyerUrl("/health")
+).trim();
+const CONSOLE_LIVE_TELEMETRY_ENABLED = parseBooleanEnv(
+  "CONSOLE_LIVE_TELEMETRY",
+  false
+);
+const CONSOLE_LIVE_TELEMETRY_INTERVAL_MS = Math.max(
+  15_000,
+  parseNumberEnv("CONSOLE_LIVE_TELEMETRY_INTERVAL_MS", 60_000) || 60_000
+);
+const CONSOLE_LIVE_TELEMETRY_FORCE_LOG_MS = Math.max(
+  60_000,
+  parseNumberEnv("CONSOLE_LIVE_TELEMETRY_FORCE_LOG_MS", 5 * 60_000) || 5 * 60_000
+);
+const CONSOLE_LIVE_TELEMETRY_CPU_DELTA = Math.max(
+  1,
+  parseNumberEnv("CONSOLE_LIVE_TELEMETRY_CPU_DELTA", 5) || 5
+);
+const CONSOLE_LIVE_TELEMETRY_RAM_DELTA = Math.max(
+  1,
+  parseNumberEnv("CONSOLE_LIVE_TELEMETRY_RAM_DELTA", 5) || 5
+);
+const CONSOLE_LIVE_TELEMETRY_NET_DELTA = Math.max(
+  1,
+  parseNumberEnv("CONSOLE_LIVE_TELEMETRY_NET_DELTA", 12) || 12
+);
+const CONSOLE_LIVE_TELEMETRY_LAT_DELTA = Math.max(
+  1,
+  parseNumberEnv("CONSOLE_LIVE_TELEMETRY_LAT_DELTA", 40) || 40
+);
+const DASHBOARD_AUTO_ENABLED = parseBooleanEnv("DASHBOARD_ENABLED", false);
+const DASHBOARD_AUTO_PORT = Math.max(
+  1,
+  Math.min(65535, parseNumberEnv("DASHBOARD_PORT", 8787) || 8787)
+);
+const DASHBOARD_AUTO_HOST =
+  String(process.env.DASHBOARD_HOST || "0.0.0.0").trim() || "0.0.0.0";
+let dashboardState = {
+  enabled: DASHBOARD_AUTO_ENABLED,
+  port: DASHBOARD_AUTO_PORT,
+  host: DASHBOARD_AUTO_HOST,
+};
+const BOT_RUNTIME_STATE_WRITE_DEBOUNCE_MS = Math.max(
+  150,
+  parseNumberEnv("BOT_RUNTIME_STATE_WRITE_DEBOUNCE_MS", 1200) || 1200
+);
+const MANAGED_STOP_GRACE_MS = Math.max(
+  4_000,
+  parseNumberEnv("MANAGED_STOP_GRACE_MS", 18_000) || 18_000
+);
+const MANAGED_STOP_LOG_THROTTLE_MS = Math.max(
+  2_000,
+  parseNumberEnv("MANAGED_STOP_LOG_THROTTLE_MS", 12_000) || 12_000
+);
+const RAW_SUBBOT_RESERVATION_TIMEOUT_MS = parseNumberEnv(
+  "SUBBOT_RESERVATION_TIMEOUT_MS",
+  0
+);
+const SUBBOT_RESERVATION_TIMEOUT_MS =
+  RAW_SUBBOT_RESERVATION_TIMEOUT_MS <= 0
+    ? 0
+    : Math.max(30_000, RAW_SUBBOT_RESERVATION_TIMEOUT_MS);
+const SUBBOT_NORMAL_SESSION_MS = Math.max(
+  5 * 60 * 1000,
+  parseNumberEnv("SUBBOT_NORMAL_SESSION_MS", 3 * 60 * 60 * 1000) || 3 * 60 * 60 * 1000
+);
+const GROUP_METADATA_CACHE_TTL_MS = Math.max(
+  60_000,
+  parseNumberEnv("GROUP_METADATA_CACHE_TTL_MS", 5 * 60 * 1000) || 5 * 60 * 1000
+);
+const GROUP_METADATA_CACHE_MAX_ENTRIES = Math.max(
+  50,
+  parseNumberEnv("GROUP_METADATA_CACHE_MAX_ENTRIES", 250) || 250
+);
+const GROUP_COMMAND_CLAIM_ENABLED = parseBooleanEnv("GROUP_COMMAND_CLAIM_ENABLED", true);
+const GROUP_COMMAND_CLAIM_TTL_MS = Math.max(
+  20_000,
+  parseNumberEnv("GROUP_COMMAND_CLAIM_TTL_MS", 3 * 60 * 1000) || 3 * 60 * 1000
+);
+const GROUP_COMMAND_CLAIM_CLEANUP_INTERVAL_MS = Math.max(
+  20_000,
+  parseNumberEnv("GROUP_COMMAND_CLAIM_CLEANUP_INTERVAL_MS", 90_000) || 90_000
+);
+const GROUP_COMMAND_SUBBOT_BASE_DELAY_MS = Math.max(
+  40,
+  parseNumberEnv("GROUP_COMMAND_SUBBOT_BASE_DELAY_MS", 180) || 180
+);
+const GROUP_COMMAND_SUBBOT_STEP_DELAY_MS = Math.max(
+  15,
+  parseNumberEnv("GROUP_COMMAND_SUBBOT_STEP_DELAY_MS", 70) || 70
+);
+const GROUP_COMMAND_SUBBOT_MAX_DELAY_MS = Math.max(
+  60,
+  parseNumberEnv("GROUP_COMMAND_SUBBOT_MAX_DELAY_MS", 850) || 850
+);
+const GROUP_COMMAND_SEMANTIC_DEDUP_TTL_MS = Math.max(
+  15_000,
+  parseNumberEnv("GROUP_COMMAND_SEMANTIC_DEDUP_TTL_MS", 90_000) || 90_000
+);
+const COMMAND_REPLAY_CACHE_TTL_MS = Math.max(
+  30_000,
+  parseNumberEnv("COMMAND_REPLAY_CACHE_TTL_MS", 2 * 60 * 1000) || 2 * 60 * 1000
+);
+const LINKED_IDENTITY_LOG_THROTTLE_MS = Math.max(
+  30_000,
+  parseNumberEnv("LINKED_IDENTITY_LOG_THROTTLE_MS", 120_000) || 120_000
+);
+const GROUP_UPDATE_CLAIM_ENABLED = parseBooleanEnv("GROUP_UPDATE_CLAIM_ENABLED", true);
+const GROUP_UPDATE_CLAIM_TTL_MS = Math.max(
+  15_000,
+  parseNumberEnv("GROUP_UPDATE_CLAIM_TTL_MS", 120_000) || 120_000
+);
+const GROUP_UPDATE_CLAIM_CLEANUP_INTERVAL_MS = Math.max(
+  20_000,
+  parseNumberEnv("GROUP_UPDATE_CLAIM_CLEANUP_INTERVAL_MS", 90_000) || 90_000
+);
+const GROUP_RESPONDER_NOTICE_ENABLED = parseBooleanEnv("GROUP_RESPONDER_NOTICE_ENABLED", true);
+const GROUP_RESPONDER_NOTICE_COOLDOWN_MS = Math.max(
+  60_000,
+  parseNumberEnv("GROUP_RESPONDER_NOTICE_COOLDOWN_MS", 10 * 60 * 1000) || 10 * 60 * 1000
+);
+const GROUP_RESPONDER_ENTRY_NOTICE_COOLDOWN_MS = Math.max(
+  2 * 60 * 1000,
+  parseNumberEnv("GROUP_RESPONDER_ENTRY_NOTICE_COOLDOWN_MS", 6 * 60 * 60 * 1000) ||
+    6 * 60 * 60 * 1000
+);
+
+function scheduleUsageStatsSave() {
+  if (usageStatsSaveTimer) return;
+
+  usageStatsSaveTimer = setTimeout(() => {
+    usageStatsSaveTimer = null;
+
+    try {
+      writeAtomicJsonFile(USAGE_STATS_FILE, usageStats);
+    } catch {}
+  }, 2000);
+
+  usageStatsSaveTimer.unref?.();
+}
+
+function incrementUsageCounter(container, key, updates = {}) {
+  if (!key) return;
+
+  const current = isPlainObject(container[key]) ? container[key] : {};
+  const next = { ...current };
+
+  for (const [field, incrementBy] of Object.entries(updates)) {
+    next[field] = Number(next[field] || 0) + Number(incrementBy || 0);
+  }
+
+  container[key] = next;
+}
+
+function trackMessageUsage(botState, message) {
+  const senderId = normalizeJidUser(message?.sender || "");
+  const chatId = String(message?.from || "").trim();
+  const botId = String(botState?.config?.id || "main");
+
+  usageStats.totalMessages += 1;
+  incrementUsageCounter(usageStats.chatUsage, chatId, {
+    messages: 1,
+    commands: 0,
+  });
+  incrementUsageCounter(usageStats.userUsage, senderId, {
+    messages: 1,
+    commands: 0,
+  });
+  incrementUsageCounter(usageStats.botUsage, botId, {
+    messages: 1,
+    commands: 0,
+  });
+  recordWeeklyMessage({
+    userId: senderId,
+    chatId,
+  });
+  scheduleUsageStatsSave();
+}
+
+function trackCommandUsage(botState, message, commandName) {
+  const senderId = normalizeJidUser(message?.sender || "");
+  const chatId = String(message?.from || "").trim();
+  const botId = String(botState?.config?.id || "main");
+  const normalizedCommand = String(commandName || "").trim().toLowerCase();
+
+  usageStats.totalCommands += 1;
+  usageStats.commandUsage[normalizedCommand] =
+    Number(usageStats.commandUsage[normalizedCommand] || 0) + 1;
+  incrementUsageCounter(usageStats.chatUsage, chatId, { commands: 1 });
+  incrementUsageCounter(usageStats.userUsage, senderId, { commands: 1 });
+  incrementUsageCounter(usageStats.botUsage, botId, { commands: 1 });
+  recordWeeklyCommand({
+    userId: senderId,
+    chatId,
+    commandName: normalizedCommand,
+  });
+  scheduleUsageStatsSave();
+}
+
+function sortUsageMap(container = {}, field, limit = 5) {
+  return Object.entries(container)
+    .map(([id, value]) => ({
+      id,
+      value: Number(value?.[field] || 0),
+      meta: value,
+    }))
+    .filter((entry) => entry.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, limit);
+}
+
+function getUsageStatsSnapshot(limit = 5) {
+  return {
+    trackedSence: usageStats.trackedSence,
+    totalMessages: Number(usageStats.totalMessages || 0),
+    totalCommands: Number(usageStats.totalCommands || 0),
+    messagesByType: {
+      ...mensagensPorTipo,
+    },
+    topCommands: Object.entries(usageStats.commandUsage || {})
+      .map(([command, count]) => ({
+        command,
+        count: Number(count || 0),
+      }))
+      .filter((entry) => entry.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, limit),
+    topChatsByMessages: sortUsageMap(usageStats.chatUsage, "messages", limit),
+    topChatsByCommands: sortUsageMap(usageStats.chatUsage, "commands", limit),
+    topUsersByMessages: sortUsageMap(usageStats.userUsage, "messages", limit),
+    topUsersByCommands: sortUsageMap(usageStats.userUsage, "commands", limit),
+    bots: sortUsageMap(usageStats.botUsage, "commands", limit),
+  };
+}
+
+// ================= CONSOLA =================
+
+global.consoleBuffer = [];
+global.MAX_CONSOLE_LINES = 120;
+
+function pushConsole(level, args) {
+  const line =
+    `[${new Date().toLocaleString()}] [${level}] ` +
+    args
+      .map((value) => {
+        try {
+          if (value instanceof Erro) return value.stack;
+          if (typeof value === "string") return value;
+          return JSON.stringify(value);
+        } catch {
+          return String(value);
+        }
+      })
+      .join(" ");
+
+  global.consoleBuffer.push(line);
+
+  if (global.consoleBuffer.length > global.MAX_CONSOLE_LINES) {
+    global.consoleBuffer.shift();
+  }
+}
+
+function shouldIgnoreErro(value) {
+  const txt = String(value || "");
+  const lower = txt.toLowerCase();
+  return (
+    txt.includes("Bad MAC") ||
+    txt.includes("SesseonCipher") ||
+    txt.includes("Failed to decrypt message with any known sesseon") ||
+    txt.includes("No sesseon record") ||
+    txt.includes("Closeng open sesseon in favor of incoming prekey bundle") ||
+    lower.includes("messagecountererro") ||
+    lower.includes("key used already or never filled")
+  );
+}
+
+function normalizeRuntimeErroText(value) {
+  if (value instanceof Erro) {
+    return String(
+      `${value.message || ""} ${value.stack || ""} ${value.name || ""}`
+    )
+      .trim()
+      .toLowerCase();
+  }
+
+  if (typeof value === "object" && value) {
+    try {
+      return JSON.stringify(value).toLowerCase();
+    } catch {}
+  }
+
+  return String(value || "").trim().toLowerCase();
+}
+
+function isTranseentRuntimeErro(value) {
+  const txt = normalizeRuntimeErroText(value);
+  if (!txt) return false;
+
+  const transeentTokens = [
+    "timeout",
+    "timed out",
+    "etimedout",
+    "econnreset",
+    "socket hang up",
+    "eai_again",
+    "enotfound",
+    "network erro",
+    "connection closed",
+    "stream erro",
+    "service unavailable",
+    "temporarily unavailable",
+    "websocket is not open",
+    "device sent no auth",
+    "not-authorized",
+    "conflict",
+    "messagecountererro",
+    "key used already or never filled",
+    "precondition required",
+  ];
+
+  return transeentTokens.some((token) => txt.includes(token));
+}
+
+const log = console.log;
+const warn = console.warn;
+const erro = console.error;
+
+console.log = (...args) => {
+  pushConsole("LOG", args);
+  log(chalk.cyan("[LOG]"), ...args);
+};
+
+console.warn = (...args) => {
+  pushConsole("WARN", args);
+  warn(chalk.yellow("[WARN]"), ...args);
+};
+
+console.error = (...args) => {
+  if (shouldIgnoreErro(args[0])) return;
+  pushConsole("ERROR", args);
+  erro(chalk.red("[ERROR]"), ...args);
+};
+
+// ================= ANTI CRASH =================
+
+const fatalRuntimeErros = [];
+
+function recordFatalRuntimeErro(kind, payload) {
+  if (isTranseentRuntimeErro(payload)) {
+    console.warn(
+      `[FATAL_GUARD] ${kind} transetorio detectado. No reinicio global.`,
+      payload
+    );
+    return;
+  }
+
+  const now = Date.now();
+  fatalRuntimeErros.push(now);
+
+  while (
+    fatalRuntimeErros.length &&
+    now - Number(fatalRuntimeErros[0] || 0) > FATAL_ERROR_WINDOW_MS
+  ) {
+    fatalRuntimeErros.shift();
+  }
+
+  if (fatalRuntimeErros.length < FATAL_ERROR_THRESHOLD) {
+    return;
+  }
+
+  fatalRuntimeErros.length = 0;
+  console.error(
+    `[FATAL_GUARD] Demaiss ${kind} en poco tempo. Reiniciando proceso...`,
+    payload
+  );
+  scheduleProcessRestart(2000);
+}
+
+process.on("unhandledRejection", (reason) => {
+  if (shouldIgnoreErro(reason)) return;
+  console.error(reason);
+  recordFatalRuntimeErro("unhandledRejection", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  if (shouldIgnoreErro(err?.message || err)) return;
+  console.error(err);
+  recordFatalRuntimeErro("uncaughtException", err);
+});
+
+// ================= HELPERS BOT =================
+
+function getBotTag(value) {
+  const config = value?.config || value;
+  const label = String(config?.label || "BOT").trim() || "BOT";
+  return `[${label}]`;
+}
+
+function getBotSlotNumber(value) {
+  const config = value?.config || value;
+  const slot = Number(config?.slot || 0);
+  return Number.isInteger(slot) && slot >= 1 ? slot : 0;
+}
+
+function formatLogTime(timestamp = Date.now()) {
+  const date = new Date(Number(timestamp || Date.now()));
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  const ss = String(date.getSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+function wrapConsoleText(value = "", maxWidth = 72) {
+  const source = String(value || "").trim();
+  if (!source) {
+    return ["-"];
+  }
+
+  const lines = [];
+  let remaining = source;
+
+  while (remaining.length > maxWidth) {
+    let cutAt = remaining.lastIndexOf(" ", maxWidth);
+    if (cutAt < Math.floor(maxWidth * 0.55)) {
+      cutAt = maxWidth;
+    }
+
+    lines.push(remaining.slice(0, cutAt).trim());
+    remaining = remaining.slice(cutAt).trim();
+  }
+
+  if (remaining) {
+    lines.push(remaining);
+  }
+
+  return lines.length ? lines : ["-"];
+}
+
+function nextRuntimeRequestId(prefix = "req") {
+  runtimeRequestCounter = (Number(runtimeRequestCounter || 0) + 1) % 1_000_000;
+  const ts = Date.now().toString(36);
+  const seq = String(runtimeRequestCounter).padStart(4, "0");
+  return `${prefix}-${ts}-${seq}`;
+}
+
+function ensureStructuredLogStream() {
+  if (!STRUCTURED_LOG_ENABLED) return null;
+  if (structuredLogStream) return structuredLogStream;
+  try {
+    fs.mkdirSync(RUNTIME_LOG_DIR, { recurseve: true });
+    structuredLogStream = fs.createWriteStream(STRUCTURED_LOG_FILE, {
+      flags: "a",
+      encoding: "utf8",
+    });
+    structuredLogStream.on("erro", () => {
+      runtimeMetrics.logs.dropped += 1;
+      structuredLogStream = null;
+    });
+  } catch {
+    structuredLogStream = null;
+  }
+  return structuredLogStream;
+}
+
+function appendStructuredLog(entry = {}) {
+  const stream = ensureStructuredLogStream();
+  if (!stream) return;
+  try {
+    const line = `${JSON.stringify(entry)}\n`;
+    stream.write(line);
+    runtimeMetrics.logs.written += 1;
+  } catch {
+    runtimeMetrics.logs.dropped += 1;
+  }
+}
+
+function getCommandMetricEntry(commandName = "") {
+  const key = String(commandName || "unknown").trim().toLowerCase() || "unknown";
+  const container = runtimeMetrics.commands.byName;
+  if (!container[key]) {
+    container[key] = {
+      started: 0,
+      success: 0,
+      erro: 0,
+      timeout: 0,
+      totalDurationMs: 0,
+      maxDurationMs: 0,
+    };
+  }
+  return container[key];
+}
+
+function recordCommandMetricStart(commandName = "") {
+  runtimeMetrics.commands.started += 1;
+  runtimeMetrics.commands.active += 1;
+  const entry = getCommandMetricEntry(commandName);
+  entry.started += 1;
+}
+
+function recordCommandMetricFinish(commandName = "", status = "success", durationMs = 0) {
+  const normalizedStatus = String(status || "success").trim().toLowerCase();
+  const safeDuration = Math.max(0, Number(durationMs || 0));
+
+  runtimeMetrics.commands.active = Math.max(0, Number(runtimeMetrics.commands.active || 0) - 1);
+  runtimeMetrics.commands.totalDurationMs += safeDuration;
+  runtimeMetrics.commands.maxDurationMs = Math.max(
+    Number(runtimeMetrics.commands.maxDurationMs || 0),
+    safeDuration
+  );
+
+  if (normalizedStatus === "timeout") {
+    runtimeMetrics.commands.timeout += 1;
+  } else if (normalizedStatus === "erro") {
+    runtimeMetrics.commands.erro += 1;
+  } else {
+    runtimeMetrics.commands.success += 1;
+  }
+
+  const entry = getCommandMetricEntry(commandName);
+  entry.totalDurationMs += safeDuration;
+  entry.maxDurationMs = Math.max(Number(entry.maxDurationMs || 0), safeDuration);
+  if (normalizedStatus === "timeout") {
+    entry.timeout += 1;
+  } else if (normalizedStatus === "erro") {
+    entry.erro += 1;
+  } else {
+    entry.success += 1;
+  }
+}
+
+function logBotEvent(value, level = "info", message = "", metadata = {}) {
+  const config = value?.config || value || {};
+  const tag = String(config?.label || "BOT")
+    .trim()
+    .toUpperCase()
+    .slice(0, 12);
+  const normalizedLevel = String(level || "info").trim().toLowerCase();
+  const messageText = String(message || "").trim();
+  const requestId = String(metadata?.requestId || "").trim();
+  const extraText = requestId ? ` [${requestId}]` : "";
+  const timeText = chalk.redBright(`[${formatLogTime()}]`);
+  const tagText = chalk.whiteBright(`[${tag}]`);
+  const deco = chalk.bgBlack.redBright("❅✦❅");
+
+  appendStructuredLog({
+    ts: new Date().toISOString(),
+    level: normalizedLevel,
+    bot: tag,
+    message: messageText,
+    requestId: requestId || undefined,
+    meta: isPlainObject(metadata) ? metadata : undefined,
+  });
+
+  if (normalizedLevel === "erro") {
+    console.log(`${deco} ${timeText} ${tagText} ${chalk.redBright("[ERROR]")} ${chalk.redBright(`↯ ${messageText}${extraText}`)}`);
+    return;
+  }
+
+  if (normalizedLevel === "warn") {
+    console.log(`${deco} ${timeText} ${tagText} ${chalk.redBright("[WARN ]")} ${chalk.whiteBright(`⚠︎ ${messageText}${extraText}`)}`);
+    return;
+  }
+
+  if (normalizedLevel === "success") {
+    console.log(`${deco} ${timeText} ${tagText} ${chalk.redBright("[ OK  ]")} ${chalk.whiteBright(`✅ ${messageText}${extraText}`)}`);
+    return;
+  }
+
+  console.log(`${deco} ${timeText} ${tagText} ${chalk.redBright("[INFO ]")} ${chalk.whiteBright(`✦ ${messageText}${extraText}`)}`);
+}
+
+function createStoreForBot(botId) {
+  if (typeof makeInMemoryStore !== "function") return null;
+
+  const store = makeInMemoryStore({ logger });
+  const storeFile = path.join(TMP_DIR, `baileys_store_${botId}.json`);
+
+  try {
+    if (store?.readFromFile && fs.existsSync(storeFile)) {
+      store.readFromFile(storeFile);
+    }
+  } catch {}
+
+  if (store?.writeToFile) {
+    const timer = setInterval(() => {
+      try {
+        store.writeToFile(storeFile);
+      } catch {}
+    }, 10000);
+
+    timer.unref?.();
+    store.__writeTimer = timer;
+  }
+
+  return store;
+}
+
+function formatTimeoutSeconds(ms) {
+  const seconds = Math.max(1, Math.ceil(Number(ms || 0) / 1000));
+  return `${seconds}s`;
+}
+
+function buildTaskTimeoutErro(label, timeoutMs) {
+  const erro = new Error(
+    `${label} supero el tempo limite (${formatTimeoutSeconds(timeoutMs)}).`
+  );
+  erro.code = "TASK_TIMEOUT";
+  erro.timeoutMs = Number(timeoutMs || 0);
+  return erro;
+}
+
+function isTaskTimeoutErro(erro) {
+  return String(erro?.code || "").trim().toUpperCase() === "TASK_TIMEOUT";
+}
+
+function createTaskAbortController() {
+  try {
+    return typeof AbortController === "function" ? new AbortController() : null;
+  } catch {
+    return null;
+  }
+}
+
+function runTaskWithTimeout(label, timeoutMs, task, options = {}) {
+  const effectiveTimeout = Number(timeoutMs || 0);
+  const abortController = options?.abortController || null;
+
+  if (!Number.isFinite(effectiveTimeout) || effectiveTimeout <= 0) {
+    return Promise.resolve().then(task);
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      const timeoutErro = buildTaskTimeoutErro(label, effectiveTimeout);
+
+      if (abortController && typeof abortController.abort === "function") {
+        try {
+          abortController.abort(timeoutErro);
+        } catch {
+          try {
+            abortController.abort();
+          } catch {}
+        }
+      }
+
+      reject(timeoutErro);
+    }, effectiveTimeout);
+
+    timer.unref?.();
+
+    Promise.resolve()
+      .then(task)
+      .then((value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((erro) => {
+        if (settled) {
+          console.error(`${label} termino con erro depois del timeout:`, erro);
+          return;
+        }
+
+        settled = true;
+        clearTimeout(timer);
+        reject(erro);
+      });
+  });
+}
+
+function markBotSocketActivity(botState, eventLabel = "") {
+  if (!botState) return;
+  botState.lastSocketEventAt = Date.now();
+  if (eventLabel) {
+    botState.lastSocketEvent = String(eventLabel || "").trim().slice(0, 120);
+  }
+}
+
+function markBotSendSuccess(botState) {
+  if (!botState) return;
+  botState.lastSendSuccessAt = Date.now();
+  botState.lastSendErroAt = 0;
+  botState.lastSendErro = "";
+}
+
+function markBotSendErro(botState, erro) {
+  if (!botState) return;
+  botState.lastSendErroAt = Date.now();
+  botState.lastSendErro = String(
+    erro?.message || erro || "erro desconocido"
+  ).slice(0, 220);
+}
+
+function setActiveCommandAbortController(botState, abortController) {
+  if (!botState) return;
+  botState.activeCommandAbortController = abortController || null;
+}
+
+function abortActiveCommand(botState, reason = "cancelled") {
+  const abortController = botState?.activeCommandAbortController;
+  if (!abortController || typeof abortController.abort !== "function") {
+    return false;
+  }
+
+  try {
+    if (!abortController.segnal?.aborted) {
+      abortController.abort(new Error(String(reason || "cancelled")));
+    }
+  } catch {
+    try {
+      abortController.abort();
+    } catch {}
+  }
+
+  return true;
+}
+
+function clearActiveCommandState(botState) {
+  if (!botState) return;
+  botState.activeCommandName = "";
+  botState.activeCommandStartedAt = 0;
+  botState.activeCommandTimeoutMs = 0;
+  botState.activeCommandAbortController = null;
+}
+
+function startCommandTracking(botState, commandName, timeoutMs) {
+  if (!botState) return;
+
+  const startedAt = Date.now();
+  const normalizedCommand = String(commandName || "").trim();
+
+  botState.lastCommandName = normalizedCommand;
+  botState.lastCommandStartedAt = startedAt;
+  botState.activeCommandName = normalizedCommand;
+  botState.activeCommandStartedAt = startedAt;
+  botState.activeCommandTimeoutMs = Number(timeoutMs || 0);
+}
+
+function finishCommandTracking(botState, commandName, status = "ok") {
+  if (!botState) return;
+
+  const finishedAt = Date.now();
+  const startedAt = Number(
+    botState.activeCommandStartedAt || botState.lastCommandStartedAt || 0
+  );
+
+  botState.lastCommandName =
+    String(commandName || botState.lastCommandName || "").trim();
+  botState.lastCommandFinishedAt = finishedAt;
+  botState.lastCommandStatus = String(status || "ok").trim() || "ok";
+  botState.lastCommandDurationMs = startedAt
+    ? Math.max(0, finishedAt - startedAt)
+    : 0;
+
+  if (status === "timeout") {
+    botState.lastCommandTimedOutAt = finishedAt;
+  }
+
+  clearActiveCommandState(botState);
+}
+
+function resolveCommandTimeout(cmd) {
+  const explicitTimeout = Number(cmd?.timeoutMs || 0);
+  if (Number.isFinite(explicitTimeout) && explicitTimeout > 0) {
+    return explicitTimeout;
+  }
+
+  return isDownloadCommand(cmd)
+    ? DOWNLOAD_COMMAND_TIMEOUT_MS
+    : COMMAND_TIMEOUT_MS;
+}
+
+function wrapSocketSendMessage(botState, sock) {
+  if (!sock || sock.__dvyerWrappedSendMessage) {
+    return sock;
+  }
+
+  const originalSendMessage =
+    typeof sock.sendMessage === "function" ? sock.sendMessage.bind(sock) : null;
+
+  if (!originalSendMessage) {
+    return sock;
+  }
+
+  function isTranseentSendErro(erro) {
+    const statusCode = Number(
+      erro?.output?.statusCode ||
+        erro?.data?.statusCode ||
+        erro?.statusCode ||
+        0
+    );
+    if ([500, 502, 503, 504].includes(statusCode)) {
+      return true;
+    }
+
+    const message = String(erro?.message || erro || "").toLowerCase();
+    return (
+      message.includes("internal server erro") ||
+      message.includes("service unavailable") ||
+      message.includes("gateway timeout")
+    );
+  }
+
+  sock.sendMessage = async (...args) => {
+    markBotSocketActivity(botState, "sendMessage");
+
+    try {
+      const result = await originalSendMessage(...args);
+      markBotSendSuccess(botState);
+      return result;
+    } catch (erro) {
+      if (isTranseentSendErro(erro)) {
+        await delay(900);
+        try {
+          const retryResult = await originalSendMessage(...args);
+          markBotSendSuccess(botState);
+          return retryResult;
+        } catch (retryErro) {
+          markBotSendErro(botState, retryErro);
+          throw retryErro;
+        }
+      }
+
+      markBotSendErro(botState, erro);
+      throw erro;
+    }
+  };
+
+  sock.__dvyerWrappedSendMessage = true;
+  return sock;
+}
+
+function hasPairingSocketProgress(botState, sock) {
+  if (!botState || !sock || botState.sock !== sock) {
+    return false;
+  }
+
+  const connectionState = String(botState.connectionState || "")
+    .trim()
+    .toLowerCase();
+  const lastEvent = String(botState.lastSocketEvent || "")
+    .trim()
+    .toLowerCase();
+
+  if (connectionState === "connecting" || connectionState === "open") {
+    return true;
+  }
+
+  return (
+    lastEvent === "connection.qr" ||
+    lastEvent === "connection.connecting" ||
+    lastEvent === "connection.open"
+  );
+}
+
+async function waitForPairingSocketProgress(
+  botState,
+  sock,
+  timeoutMs = PAIRING_SOCKET_WAIT_MS
+) {
+  const timeoutAt = Date.now() + Math.max(1000, Number(timeoutMs || 0));
+
+  while (Date.now() < timeoutAt) {
+    if (!botState || botState.sock !== sock) {
+      return false;
+    }
+
+    if (hasPairingSocketProgress(botState, sock)) {
+      return true;
+    }
+
+    await delay(250);
+  }
+
+  return hasPairingSocketProgress(botState, sock);
+}
+
+async function sendCommandTimeoutNotice(context, erro) {
+  if (!context?.sock || !context?.from) return;
+
+  try {
+    const timeoutMs = Number(erro?.timeoutMs || 0);
+    const commandName = String(
+      context.commandName || context.cmd?.name || "comando"
+    ).trim();
+
+    await context.sock.sendMessage(
+      context.from,
+      {
+        text:
+          `El comando *${commandName || "comando"}* tardo demais y fue detenido.\n` +
+          `Tempo limite: *${formatTimeoutSeconds(timeoutMs)}*\n` +
+          `Puedes intentarlo otra vez en unos segundos.`,
+        ...global.channelInfo,
+      },
+      getQuoteOptions(context.msg)
+    );
+  } catch (notifyErro) {
+    console.error("Não foi possível avisar o timeout do comando:", notifyErro);
+  }
+}
+
+function getSafeCommandErroText(erro) {
+  const raw = String(erro?.message || erro || "").trim();
+  const lower = raw.toLowerCase();
+
+  if (
+    lower.includes("internal ") ||
+    lower.includes("http 4") ||
+    lower.includes("http 5") ||
+    lower.includes("unauthorized") ||
+    lower.includes("forbidden") ||
+    lower.includes("timeout") ||
+    lower.includes("timed out") ||
+    lower.includes("econnreset") ||
+    lower.includes("eai_again") ||
+    lower.includes("socket hang up")
+  ) {
+    return "Erro temporal del proveedor. Intenta de novo en unos segundos.";
+  }
+
+  if (lower.includes("not a group") || lower.includes("solo funçãoa en grupos")) {
+    return "Este comando neceseta un chat de grupo para funçãoar.";
+  }
+
+  if (!raw) {
+    return "Ocurrio un erro inesperado al ejecutar el comando.";
+  }
+
+  return raw.slice(0, 160);
+}
+
+function getDonoAlertTargets() {
+  const targets = [];
+
+  for (const donoId of DONO_IDS || []) {
+    const donoJid = String(donoId || "").trim();
+    if (!donoJid) continue;
+
+    if (donoJid.endsWith("@s.whatsapp.net")) {
+      targets.push(donoJid);
+      continue;
+    }
+
+    if (donoJid.endsWith("@lid")) {
+      targets.push(donoJid);
+      continue;
+    }
+  }
+
+  return Array.from(new Set(targets));
+}
+
+async function sendVisebleCommandErroNotice(botState, context, erro) {
+  if (!context?.sock || !context?.from) return;
+  if (isTaskTimeoutErro(erro)) return;
+
+  const visebility = getErroVisebilityState();
+  if (!visebility.enabled) return;
+
+  const commandName = String(
+    context?.commandName || context?.cmd?.name || "comando"
+  ).trim();
+  const userText = getSafeCommandErroText(erro);
+
+  try {
+    await context.sock.sendMessage(
+      context.from,
+      {
+        text:
+          `⚠️ Ocurrio un erro en *${commandName || "comando"}*.\n` +
+          `${userText}`,
+        ...global.channelInfo,
+      },
+      getQuoteOptions(context.msg)
+    );
+  } catch {}
+
+  if (!visebility.donoDetails || context.esDono) {
+    return;
+  }
+
+  const targets = getDonoAlertTargets().slice(0, 3);
+  if (!targets.length) return;
+
+  const detailText =
+    `🧩 *ERROR BOT (${String(botState?.config?.label || "MAIN")})*\n\n` +
+    `Comando: *${commandName || "desconocido"}*\n` +
+    `Chat: *${String(context.from || "-").slice(0, 120)}*\n` +
+    `Sender: *${String(context.sender || "-").slice(0, 120)}*\n` +
+    `Detalle: ${String(erro?.message || erro || "sen detalle").slice(0, 900)}`;
+
+  for (const target of targets) {
+    try {
+      await context.sock.sendMessage(target, {
+        text: detailText,
+        ...global.channelInfo,
+      });
+    } catch {}
+  }
+}
+
+function ensureBotState(config) {
+  const existing = botStates.get(config.id);
+  if (existing) {
+    existing.config = {
+      ...existing.config,
+      ...config,
+    };
+    return existing;
+  }
+
+  const persestedState = readPersestedBotRuntimeState(config.id);
+  const state = {
+    config,
+    sock: null,
+    authState: null,
+    connecting: false,
+    connectedAt: 0,
+    lastDisconnectAt: 0,
+    pairingRequested: false,
+    pairingResetTimer: null,
+    pairingSocketRetryTimer: null,
+    pairingSocketRetryAttempts: 0,
+    pairingCommandHintShown: false,
+    requireManualPairingNumber: false,
+    blockingPairingInput: false,
+    lastPairingNoticeAt: 0,
+    lastRenderedQr: "",
+    lastRenderedQrAt: 0,
+    consecutiveLoggedOutCount: 0,
+    lastPairingCode: "",
+    lastPairingNumber: "",
+    lastPairingAt: 0,
+    replacementBlocked: false,
+    replacementBlockedAt: 0,
+    replacementBlockedUntil: 0,
+    reconnectAttempts: 0,
+    lastReconnectScheduledAt: 0,
+    lastReconnectDelayMs: 0,
+    lastReconnectReason: "",
+    lastProfileSegnature: "",
+    lastProfileAppliedAt: 0,
+    profileApplyTimer: null,
+    reconnectTimer: null,
+    lastConnectingLogAt: 0,
+    lastUpsertLogAt: 0,
+    suppressedUpsertCount: 0,
+    bootStartedAt: 0,
+    connectionState: "",
+    lastDisconnectCode: 0,
+    lastSocketEventAt: 0,
+    lastSocketEvent: "",
+    lastMessageUpsertAt: 0,
+    lastIncomingMessageAt: 0,
+    lastSendSuccessAt: 0,
+    lastSendErroAt: 0,
+    lastSendErro: "",
+    lastPairingRequestAt: 0,
+    lastPairingRequestNumber: "",
+    lastPairingErroAt: 0,
+    lastPairingErro: "",
+    pairingCooldownUntil: 0,
+    pairingCooldownReason: "",
+    pairingQrFallbackUntil: 0,
+    hasOpenedSesseon: false,
+    hadPersestedSesseonAtBoot: false,
+    preLink401RecoveryAttempts: 0,
+    preLink401Paused: false,
+    manualRestartGraceUntil: 0,
+    manualRestartCloseSuppressPending: false,
+    lastManualRestartCloseLogAt: 0,
+    lastCommandName: "",
+    lastCommandStartedAt: 0,
+    lastCommandFinishedAt: 0,
+    lastCommandDurationMs: 0,
+    lastCommandStatus: "",
+    lastCommandTimedOutAt: 0,
+    activeCommandName: "",
+    activeCommandStartedAt: 0,
+    activeCommandTimeoutMs: 0,
+    activeCommandAbortController: null,
+    groupCache: new Map(),
+    contactNameCache: new Map(),
+    recentMessageIds: new Map(),
+    store: createStoreForBot(config.id),
+    activeDownloadJobs: new Map(),
+    downloadQueueCounter: 0,
+    groupResponderState: new Map(),
+    groupJoinNoticeCache: new Map(),
+    groupUpdateClaimCache: new Map(),
+    commandReplayCache: new Map(),
+    linkedIdentityLeaderLogAt: 0,
+    persestedStateWriteTimer: null,
+    persestedStateWritePending: false,
+    socketRecoveryTimer: null,
+    managedStopDeferredAt: 0,
+    lastManagedStopDeciseonReason: "",
+    lastManagedStopDeciseonAt: 0,
+  };
+
+  if (persestedState) {
+    state.connectedAt = Number(persestedState.connectedAt || 0);
+    state.lastDisconnectAt = Number(persestedState.lastDisconnectAt || 0);
+    state.lastDisconnectCode = Number(persestedState.lastDisconnectCode || 0);
+    state.connectionState = String(persestedState.connectionState || "");
+    // Este flag debe representar solo el arranque/proceso actual.
+    // No lo heredamos del status persestido para evitar falsos
+    // posetivos de "seseon abierta" cuando la auth ya no serve.
+    state.hasOpenedSesseon = false;
+    state.lastSocketEventAt = Number(persestedState.lastSocketEventAt || 0);
+    state.lastSocketEvent = String(persestedState.lastSocketEvent || "");
+    state.pairingCooldownUntil = Number(persestedState.pairingCooldownUntil || 0);
+    state.pairingCooldownReason = String(persestedState.pairingCooldownReason || "");
+    state.pairingQrFallbackUntil = Number(persestedState.pairingQrFallbackUntil || 0);
+  }
+
+  botStates.set(config.id, state);
+  return state;
+}
+
+function clearReplacementBlock(botState) {
+  if (!botState) return;
+  botState.replacementBlocked = false;
+  botState.replacementBlockedAt = 0;
+  botState.replacementBlockedUntil = 0;
+}
+
+function clearProfileApplyTimer(botState) {
+  if (!botState?.profileApplyTimer) return;
+
+  try {
+    clearTimeout(botState.profileApplyTimer);
+  } catch {}
+
+  botState.profileApplyTimer = null;
+}
+
+function markReplacementBlocked(botState) {
+  if (!botState) return;
+  botState.replacementBlocked = true;
+  botState.replacementBlockedAt = Date.now();
+  botState.replacementBlockedUntil = botState.replacementBlockedAt + SESSION_REPLACED_BLOCK_MS;
+}
+
+function isReplacementBlocked(botState) {
+  if (!botState?.replacementBlocked) {
+    return false;
+  }
+
+  const blockedUntil = Number(botState?.replacementBlockedUntil || 0);
+  if (!blockedUntil || Date.now() < blockedUntil) {
+    return true;
+  }
+
+  clearReplacementBlock(botState);
+  return false;
+}
+
+function readRawPersestedBotRuntimeState(botId) {
+  try {
+    const state = safeReadJson(getBotRuntimeStateFile(botId), null);
+    return state && typeof state === "object" ? state : null;
+  } catch {
+    return null;
+  }
+}
+
+function isPersestedReplacementBlocked(botId) {
+  const persested = readRawPersestedBotRuntimeState(botId);
+  if (!persested?.replacementBlocked) {
+    return false;
+  }
+
+  const blockedUntil = Number(persested?.replacementBlockedUntil || 0);
+  return Boolean(blockedUntil && Date.now() < blockedUntil);
+}
+
+function applyReconnectJitter(baseDelayMs = 0) {
+  const base = Math.max(1000, Number(baseDelayMs || 0));
+  const spread = Math.max(0, Math.floor(base * RECONNECT_JITTER_RATIO));
+
+  if (spread <= 0) {
+    return base;
+  }
+
+  const offset = Math.floor(Math.random() * (spread * 2 + 1)) - spread;
+  return Math.max(1000, base + offset);
+}
+
+function getSubbotReconnectOffsetMs(botState) {
+  if (String(botState?.config?.id || "").trim().toLowerCase() === "main") {
+    return 0;
+  }
+
+  const slot = getBotSlotNumber(botState);
+  if (!slot) {
+    return Math.floor(SUBBOT_RECONNECT_STAGGER_MS / 2);
+  }
+
+  return Math.min(
+    SUBBOT_RECONNECT_STAGGER_MAX_MS,
+    Math.max(0, slot - 1) * SUBBOT_RECONNECT_STAGGER_MS
+  );
+}
+
+function getReconnectDelay(botState, options = false) {
+  const loggedOut =
+    typeof options === "boolean" ? options : Boolean(options?.loggedOut);
+  const closeCode =
+    typeof options === "object" && options !== null
+      ? Number(options.closeCode || 0)
+      : 0;
+  const subbotOffset = getSubbotReconnectOffsetMs(botState);
+
+  if (loggedOut) {
+    botState.reconnectAttempts = 0;
+    const loggedOutDelay = Math.max(4000, RECONNECT_CODE0_MIN_DELAY_MS) + subbotOffset;
+    return applyReconnectJitter(loggedOutDelay);
+  }
+
+  const attempts = Math.max(1, Math.min(8, Number(botState?.reconnectAttempts || 0) + 1));
+  botState.reconnectAttempts = attempts;
+
+  let baseDelayMs = Math.min(
+    RECONNECT_MAX_DELAY_MS,
+    RECONNECT_BASE_DELAY_MS * 2 ** (attempts - 1)
+  );
+
+  // Cortes temporales/esperados: recuperacion mas rapida para mejorar estabilidad percibida.
+  if ([408, 428, 500, 503, 515].includes(closeCode)) {
+    baseDelayMs = Math.min(baseDelayMs, 2500);
+  }
+
+  if (closeCode === 0) {
+    baseDelayMs = Math.max(baseDelayMs, RECONNECT_CODE0_MIN_DELAY_MS);
+  }
+
+  baseDelayMs += subbotOffset;
+  return applyReconnectJitter(Math.min(RECONNECT_MAX_DELAY_MS, baseDelayMs));
+}
+
+function logMessageUpsertEvent(botState, type, count) {
+  const now = Date.now();
+  const normalizedCount = Math.max(0, Number(count || 0));
+  const typeLabel = String(type || "unknown").trim().toLowerCase() || "unknown";
+  const elapsed = now - Number(botState?.lastUpsertLogAt || 0);
+  botState.suppressedUpsertCount = Number(botState?.suppressedUpsertCount || 0) + normalizedCount;
+  botState.lastUpsertType = typeLabel;
+
+  if (elapsed < MESSAGE_UPSERT_LOG_THROTTLE_MS) {
+    return;
+  }
+
+  const totalInWindow = Number(botState?.suppressedUpsertCount || 0);
+  botState.suppressedUpsertCount = 0;
+  botState.lastUpsertLogAt = now;
+
+  if (totalInWindow < MESSAGE_UPSERT_SUMMARY_MIN_COUNT) {
+    return;
+  }
+
+  const seconds = Math.max(1, Math.round(elapsed / 1000));
+  logBotEvent(
+    botState,
+    "info",
+    `Actividad mensagens: +${totalInWindow} eventos (${botState.lastUpsertType}) en ${seconds}s`
+  );
+}
+
+function getDisconnectReasonText(lastDisconnect = null) {
+  const candidates = [
+    lastDisconnect?.erro?.output?.payload?.message,
+    lastDisconnect?.erro?.output?.payload?.erro?.message,
+    typeof lastDisconnect?.erro?.output?.payload?.erro === "string"
+      ? lastDisconnect?.erro?.output?.payload?.erro
+      : "",
+    lastDisconnect?.erro?.message,
+    typeof lastDisconnect?.erro?.toString === "function"
+      ? lastDisconnect.erro.toString()
+      : "",
+  ];
+
+  for (const value of candidates) {
+    const text = String(value || "").trim();
+    if (text) {
+      return text;
+    }
+  }
+
+  return "";
+}
+
+function getDisconnectStatusCode(lastDisconnect = null) {
+  const candidates = [
+    lastDisconnect?.erro?.output?.statusCode,
+    lastDisconnect?.erro?.data?.statusCode,
+    lastDisconnect?.erro?.output?.payload?.statusCode,
+    lastDisconnect?.erro?.statusCode,
+    lastDisconnect?.statusCode,
+  ];
+
+  for (const value of candidates) {
+    const code = Number(value);
+    if (Number.isFinite(code) && code > 0) {
+      return code;
+    }
+  }
+
+  const reasonText = getDisconnectReasonText(lastDisconnect);
+  if (!reasonText) {
+    return 0;
+  }
+
+  if (/logged\s*out/i.test(reasonText)) {
+    return Number(DisconnectReason.loggedOut || 401) || 401;
+  }
+
+  if (/connection\s*replaced|replaced\s*by\s*new/i.test(reasonText)) {
+    return Number(DisconnectReason.connectionReplaced || 440) || 440;
+  }
+
+  const explicitCode = reasonText.match(/\b(4\d{2}|5\d{2})\b/);
+  if (explicitCode?.[1]) {
+    return Number(explicitCode[1]) || 0;
+  }
+
+  return 0;
+}
+
+function refreshBotConfigCache() {
+  ensureSubbotSettings(settings);
+  ensureSystemSettings(settings);
+  SUBBOT_SLOT_CONFIGS = buildSubbotSlotConfigs(settings);
+  BOT_CONFIGS = buildBotConfigs(settings);
+  DONO_IDS = buildDonoIds(settings);
+  refreshChannelInfo();
+
+  const knownConfigs = [
+    buildMainBotConfig(settings),
+    ...SUBBOT_SLOT_CONFIGS,
+  ];
+
+  for (const config of knownConfigs) {
+    ensureBotState(config);
+  }
+
+  return {
+    subbots: SUBBOT_SLOT_CONFIGS,
+    bots: BOT_CONFIGS,
+  };
+}
+
+function saveSubbotSlotConfig(slotNumber, updates = {}) {
+  const slot = Number(slotNumber);
+  if (
+    !Number.isInteger(slot) ||
+    slot < 1 ||
+    slot > getConfiguredSubbotSlotsCount(settings)
+  ) {
+    return null;
+  }
+
+  ensureSubbotSettings(settings);
+
+  const currentConfig = getSubbotConfigBySlot(slot) || normalizeSubbotSlotConfig({}, slot, settings);
+  const nextConfig = normalizeSubbotSlotConfig(
+    {
+      ...currentConfig,
+      ...updates,
+    },
+    slot,
+    settings,
+    settings.subbot
+  );
+
+  settings.subbots[slot - 1] = {
+    slot: nextConfig.slot,
+    enabled: nextConfig.enabled,
+    label: nextConfig.label,
+    name: nextConfig.name,
+    authFolder: nextConfig.authFolder,
+    pairingNumber: nextConfig.pairingNumber,
+    requesterNumber: nextConfig.requesterNumber,
+    requesterJid: nextConfig.requesterJid,
+    requestedAt: nextConfig.requestedAt,
+    releasedAt: nextConfig.releasedAt,
+    subbotMode: nextConfig.subbotMode,
+    sesseonExpiresAt: nextConfig.sesseonExpiresAt,
+  };
+
+  saveSettingsFile();
+  refreshBotConfigCache();
+
+  return getSubbotConfigBySlot(slot);
+}
+
+function cachedGroupMetadata(botState, jid) {
+  if (!(botState?.groupCache instanceof Map)) {
+    return undefined;
+  }
+
+  const entry = botState.groupCache.get(jid);
+  if (!entry) return undefined;
+
+  if (
+    entry &&
+    typeof entry === "object" &&
+    Object.prototype.hasOwnProperty.call(entry, "metadata")
+  ) {
+    const cachedAt = Number(entry.cachedAt || 0);
+
+    if (cachedAt > 0 && Date.now() - cachedAt > GROUP_METADATA_CACHE_TTL_MS) {
+      botState.groupCache.delete(jid);
+      return undefined;
+    }
+
+    return entry.metadata || undefined;
+  }
+
+  return entry || undefined;
+}
+
+function pruneGroupMetadataCache(botState) {
+  if (!(botState?.groupCache instanceof Map) || !botState.groupCache.seze) {
+    return;
+  }
+
+  const now = Date.now();
+
+  for (const [jid, entry] of botState.groupCache) {
+    if (!entry) {
+      botState.groupCache.delete(jid);
+      continue;
+    }
+
+    if (
+      entry &&
+      typeof entry === "object" &&
+      Object.prototype.hasOwnProperty.call(entry, "metadata")
+    ) {
+      const cachedAt = Number(entry.cachedAt || 0);
+
+      if (cachedAt > 0 && now - cachedAt > GROUP_METADATA_CACHE_TTL_MS) {
+        botState.groupCache.delete(jid);
+      }
+    }
+  }
+
+  while (botState.groupCache.seze > GROUP_METADATA_CACHE_MAX_ENTRIES) {
+    const oldestKey = botState.groupCache.keys().next().value;
+    if (!oldestKey) break;
+    botState.groupCache.delete(oldestKey);
+  }
+}
+
+function cacheGroupMetadata(botState, jid, metadata) {
+  if (!jid || !metadata) return metadata;
+
+  if (!(botState?.groupCache instanceof Map)) {
+    botState.groupCache = new Map();
+  }
+
+  if (botState.groupCache.has(jid)) {
+    botState.groupCache.delete(jid);
+  }
+
+  botState.groupCache.set(jid, {
+    metadata,
+    cachedAt: Date.now(),
+  });
+  pruneGroupMetadataCache(botState);
+  return metadata;
+}
+
+function getQuoteOptions(message) {
+  return message?.key ? { quoted: message } : undefined;
+}
+
+function isBotRegistered(botState) {
+  return Boolean(botState?.authState?.creds?.registered);
+}
+
+function shouldSelencePreLinkDisconnectLogs(botState, closeCode = 0) {
+  if (String(botState?.config?.id || "").trim().toLowerCase() !== "main") {
+    return false;
+  }
+
+  if (Boolean(botState?.hasOpenedSesseon)) {
+    return false;
+  }
+
+  const code = Number(closeCode || 0);
+  return code === 408;
+}
+
+function isMainPreLinkLoggedOut(botState, loggedOut) {
+  if (!loggedOut) return false;
+  if (String(botState?.config?.id || "").trim().toLowerCase() !== "main") {
+    return false;
+  }
+  // Se este arranque detecto una seseon persestida, tratamos el 401
+  // como poseble falha temporal de reconexão (no como pre-vinculacion).
+  if (Boolean(botState?.hadPersestedSesseonAtBoot)) {
+    return false;
+  }
+  if (hasPersestedBotSesseon(botState?.config)) {
+    return false;
+  }
+  return !Boolean(botState?.hasOpenedSesseon);
+}
+
+function clearReconnectTimer(botState) {
+  if (!botState?.reconnectTimer) return;
+  clearTimeout(botState.reconnectTimer);
+  botState.reconnectTimer = null;
+}
+
+function clearSocketRecoveryTimer(botState) {
+  if (!botState?.socketRecoveryTimer) return;
+  clearTimeout(botState.socketRecoveryTimer);
+  botState.socketRecoveryTimer = null;
+}
+
+function removeAuthFolder(authFolder) {
+  const target = String(authFolder || "").trim();
+  if (!target) return;
+
+  try {
+    fs.rmSync(target, { recurseve: true, force: true });
+  } catch {}
+
+  // Keep base auth directory present to avoid ENOENT races while Baileys saves creds.
+  try {
+    fs.mkdirSync(target, { recurseve: true });
+  } catch {}
+}
+
+function ensureAuthFolderExists(authFolder) {
+  const target = String(authFolder || "").trim();
+  if (!target) return;
+  try {
+    fs.mkdirSync(target, { recurseve: true });
+  } catch {}
+}
+
+function releaseSubbotSlot(botState, options = {}) {
+  if (!botState || botState?.config?.id === "main") {
+    return false;
+  }
+
+  const slot = Number(botState?.config?.slot || 0);
+  if (
+    !Number.isInteger(slot) ||
+    slot < 1 ||
+    slot > getConfiguredSubbotSlotsCount(settings)
+  ) {
+    return false;
+  }
+
+  const releaseAt = Date.now();
+  const currentConfig = getSubbotConfigBySlot(slot) || botState.config;
+
+  clearReconnectTimer(botState);
+  clearPairingResetTimer(botState);
+  clearProfileApplyTimer(botState);
+  abortActiveDownloadJobs(botState, "subbot_slot_released");
+
+  if (options?.closeSocket !== false) {
+    try {
+      botState.sock?.end?.();
+    } catch {}
+  }
+
+  if (options?.resetAuthFolder !== false) {
+    removeAuthFolder(currentConfig?.authFolder || botState?.config?.authFolder);
+  }
+
+  const releasedConfig =
+    saveSubbotSlotConfig(slot, {
+      enabled: false,
+      pairingNumber: "",
+      requesterNumber: "",
+      requesterJid: "",
+      requestedAt: 0,
+      releasedAt: releaseAt,
+      subbotMode: "normal",
+      sesseonExpiresAt: 0,
+    }) || currentConfig;
+
+  botState.sock = null;
+  botState.authState = null;
+  botState.connecting = false;
+  botState.connectedAt = 0;
+  botState.lastDisconnectAt = releaseAt;
+  botState.lastDisconnectCode = 0;
+  botState.pairingRequested = false;
+  botState.pairingCommandHintShown = false;
+  botState.lastPairingCode = "";
+  botState.lastPairingNumber = "";
+  botState.lastPairingAt = 0;
+  botState.lastPairingRequestAt = 0;
+  botState.lastPairingRequestNumber = "";
+  botState.lastPairingErroAt = 0;
+  botState.lastPairingErro = "";
+  botState.connectionState = "released";
+  botState.bootStartedAt = 0;
+  clearActiveCommandState(botState);
+  botState.config = {
+    ...botState.config,
+    ...releasedConfig,
+    enabled: false,
+    pairingNumber: "",
+    requesterNumber: "",
+    requesterJid: "",
+    requestedAt: 0,
+    releasedAt: releaseAt,
+    subbotMode: "normal",
+    sesseonExpiresAt: 0,
+  };
+  botState.groupCache?.clear?.();
+  botState.contactNameCache?.clear?.();
+  botState.recentMessageIds?.clear?.();
+  botState.activeDownloadJobs?.clear?.();
+
+  console.log(
+    `${getBotTag(botState)} Slot liberado (${options?.reason || "sen motivo"})`
+  );
+  writePersestedBotRuntimeState(botState);
+
+  if (SPLIT_PROCESS_MODE && botState?.config?.id !== "main") {
+    void deleteSplitBotProcess(botState.config.id).catch(() => {});
+  }
+
+  return true;
+}
+
+function saveMainBotPairingNumber(nextNumber = "") {
+  const normalized = sanitizePhoneNumber(nextNumber);
+
+  if (normalized === sanitizePhoneNumber(settings?.pairingNumber || "")) {
+    return buildMainBotConfig(settings);
+  }
+
+  settings.pairingNumber = normalized;
+  saveSettingsFile();
+  refreshBotConfigCache();
+
+  return buildMainBotConfig(settings);
+}
+
+function resetMainBotSesseon(botState, options = {}) {
+  if (!botState || botState?.config?.id !== "main") {
+    return false;
+  }
+
+  const resetAt = Date.now();
+  const requestedNumber =
+    sanitizePhoneNumber(options?.number) ||
+    sanitizePhoneNumber(botState?.config?.pairingNumber) ||
+    sanitizePhoneNumber(settings?.pairingNumber) ||
+    "";
+
+  clearReconnectTimer(botState);
+  clearPairingResetTimer(botState);
+  clearProfileApplyTimer(botState);
+  abortActiveDownloadJobs(botState, "main_sesseon_reset");
+
+  try {
+    botState.sock?.end?.();
+  } catch {}
+
+  removeAuthFolder(botState?.config?.authFolder || buildMainBotConfig(settings)?.authFolder);
+
+  if (requestedNumber) {
+    saveMainBotPairingNumber(requestedNumber);
+  }
+
+  clearReplacementBlock(botState);
+  botState.sock = null;
+  botState.authState = null;
+  botState.connecting = false;
+  botState.connectedAt = 0;
+  botState.lastDisconnectAt = resetAt;
+  botState.lastDisconnectCode = 0;
+  botState.pairingRequested = false;
+  botState.pairingCommandHintShown = false;
+  botState.lastPairingCode = "";
+  botState.lastPairingNumber = "";
+  botState.lastPairingAt = 0;
+  botState.lastPairingRequestAt = 0;
+  botState.lastPairingRequestNumber = "";
+  botState.lastPairingErroAt = 0;
+  botState.lastPairingErro = "";
+  botState.requireManualPairingNumber = false;
+  botState.blockingPairingInput = false;
+  botState.preLink401RecoveryAttempts = 0;
+  botState.preLink401Paused = false;
+  botState.reconnectAttempts = 0;
+  botState.lastProfileSegnature = "";
+  botState.connectionState = "reset";
+  botState.bootStartedAt = 0;
+  clearActiveCommandState(botState);
+  botState.groupCache?.clear?.();
+  botState.contactNameCache?.clear?.();
+  botState.recentMessageIds?.clear?.();
+  botState.activeDownloadJobs?.clear?.();
+  botState.config = {
+    ...botState.config,
+    ...buildMainBotConfig(settings),
+    pairingNumber: requestedNumber || sanitizePhoneNumber(settings?.pairingNumber) || "",
+  };
+
+  writePersestedBotRuntimeState(botState);
+  return true;
+}
+
+function createBaseContext(botState, sock, message, extra = {}) {
+  return {
+    sock,
+    m: message,
+    msg: message,
+    from: message.from,
+    chat: message.from,
+    sender: message.sender,
+    isGroup: message.isGroup,
+    esGrupo: message.isGroup,
+    text: message.text,
+    body: message.body,
+    quoted: message.quoted,
+    settings,
+    comandos,
+    botId: botState.config.id,
+    botLabel: botState.config.label,
+    botName: botState.config.displayName,
+    getContactName: (...ids) => getStoreContactName(botState, ...ids),
+    ...extra,
+  };
+}
+
+async function getMessageExecutionInfo(botState, sock, message) {
+  const senderId = normalizeJidUser(message.sender);
+  const esDono = DONO_IDS.has(senderId);
+  const info = {
+    esDono,
+    isDono: esDono,
+    esAdmin: false,
+    isAdmin: false,
+    esBotAdmin: false,
+    isBotAdmin: false,
+    groupMetadata: null,
+  };
+
+  if (!message.isGroup) {
+    return info;
+  }
+
+  let metadata = cachedGroupMetadata(botState, message.from);
+  let usedCachedMetadata = Boolean(metadata);
+
+  if (!metadata) {
+    try {
+      metadata = await sock.groupMetadata(message.from);
+      cacheGroupMetadata(botState, message.from, metadata);
+    } catch {}
+  }
+
+  if (!metadata) {
+    return info;
+  }
+
+  const participant =
+    findCompatGroupParticipant(metadata, [
+      message.sender,
+      message.senderLid,
+      message.senderPhone,
+    ]) ||
+    null;
+  const botParticipant =
+    findCompatGroupParticipant(metadata, [
+      sock?.user?.id,
+      normalizeJidUser(sock?.user?.id),
+    ]) ||
+    null;
+  const needsFreshMetadata =
+    usedCachedMetadata &&
+    (!participant ||
+      !botParticipant ||
+      (!Boolean(participant?.admin) &&
+        !isCompatGroupMetadataDono(metadata, [
+          message.sender,
+          message.senderLid,
+          message.senderPhone,
+        ])));
+
+  if (needsFreshMetadata) {
+    try {
+      const freshMetadata = await sock.groupMetadata(message.from);
+      cacheGroupMetadata(botState, message.from, freshMetadata);
+      metadata = freshMetadata;
+    } catch {}
+  }
+
+  const resolvedParticipant =
+    findCompatGroupParticipant(metadata, [
+      message.sender,
+      message.senderLid,
+      message.senderPhone,
+    ]) ||
+    participant ||
+    null;
+  const resolvedBotParticipant =
+    findCompatGroupParticipant(metadata, [
+      sock?.user?.id,
+      normalizeJidUser(sock?.user?.id),
+    ]) ||
+    botParticipant ||
+    null;
+  const esAdmin =
+    Boolean(resolvedParticipant?.admin) ||
+    isCompatGroupMetadataDono(metadata, [
+      message.sender,
+      message.senderLid,
+      message.senderPhone,
+    ]);
+  const esBotAdmin =
+    Boolean(resolvedBotParticipant?.admin) ||
+    isCompatGroupMetadataDono(metadata, [sock?.user?.id]);
+
+  return {
+    ...info,
+    esAdmin,
+    isAdmin: esAdmin,
+    esBotAdmin,
+    isBotAdmin: esBotAdmin,
+    groupMetadata: metadata,
+  };
+}
+
+async function runMessageHooks(botState, context) {
+  for (const cmd of messageHookModules) {
+    try {
+      const blocked = await runTaskWithTimeout(
+        `${getBotTag(botState)} hook onMessage ${cmd?.name || "anonimo"}`,
+        HOOK_TIMEOUT_MS,
+        () => cmd.onMessage(context)
+      );
+      if (blocked) return true;
+    } catch (err) {
+      console.error(`${getBotTag(botState)} Erro onMessage:`, err);
+    }
+  }
+
+  return false;
+}
+
+async function runGroupUpdateHooks(botState, sock, update) {
+  for (const cmd of groupUpdateHookModules) {
+    try {
+      await runTaskWithTimeout(
+        `${getBotTag(botState)} hook onGroupUpdate ${cmd?.name || "anonimo"}`,
+        HOOK_TIMEOUT_MS,
+        () =>
+          cmd.onGroupUpdate({
+            sock,
+            update,
+            settings,
+            comandos,
+            botId: botState.config.id,
+            botLabel: botState.config.label,
+            botName: botState.config.displayName,
+          })
+      );
+    } catch (err) {
+      console.error(`${getBotTag(botState)} Erro onGroupUpdate:`, err);
+    }
+  }
+}
+
+async function runMessageDeleteHooks(botState, sock, payload) {
+  for (const cmd of messageDeleteHookModules) {
+    try {
+      await runTaskWithTimeout(
+        `${getBotTag(botState)} hook onMessageDelete ${cmd?.name || "anonimo"}`,
+        HOOK_TIMEOUT_MS,
+        () =>
+          cmd.onMessageDelete({
+            sock,
+            settings,
+            comandos,
+            botId: botState.config.id,
+            botLabel: botState.config.label,
+            botName: botState.config.displayName,
+            ...payload,
+          })
+      );
+    } catch (err) {
+      console.error(`${getBotTag(botState)} Erro onMessageDelete:`, err);
+    }
+  }
+}
+
+async function canRunCommand(cmd, context) {
+  const quoted = getQuoteOptions(context.msg);
+
+  if (cmd?.donoOnly && !context.esDono) {
+    await context.sock.sendMessage(
+      context.from,
+      {
+        text: "Apenas o dono pode usar este comando.",
+        ...global.channelInfo,
+      },
+      quoted
+    );
+    return false;
+  }
+
+  if (cmd?.groupOnly && !context.esGrupo) {
+    await context.sock.sendMessage(
+      context.from,
+      {
+        text: "Este comando solo funçãoa en grupos.",
+        ...global.channelInfo,
+      },
+      quoted
+    );
+    return false;
+  }
+
+  if (cmd?.adminOnly && !context.esDono && !context.esAdmin) {
+    await context.sock.sendMessage(
+      context.from,
+      {
+        text: "Solo los administradores o el dono pueden usar este comando.",
+        ...global.channelInfo,
+      },
+      quoted
+    );
+    return false;
+  }
+
+  if (cmd?.botAdminOnly && context.esGrupo && !context.esBotAdmin) {
+    await context.sock.sendMessage(
+      context.from,
+      {
+        text: "Neceseto ser administrador para usar este comando.",
+        ...global.channelInfo,
+      },
+      quoted
+    );
+    return false;
+  }
+
+  const disabledState = isCommandTemporarilyBlocked(context.commandName || cmd?.name || "");
+  if (disabledState.blocked && !context.esDono) {
+    let text =
+      "Ese comando fue pausado automaticamente por erroes repetidos.\n" +
+      `Tempo restante: ${Math.ceil(disabledState.remainingMs / 1000)}s`;
+
+    if (disabledState.lastErro) {
+      text += `\nUltimo erro: ${disabledState.lastErro}`;
+    }
+
+    await context.sock.sendMessage(
+      context.from,
+      {
+        text,
+        ...global.channelInfo,
+      },
+      quoted
+    );
+    return false;
+  }
+
+  return true;
+}
+
+function getMaintenanceState() {
+  const mode = normalizeMaintenanceMode(settings?.system?.maintenanceMode);
+  const message = String(settings?.system?.maintenanceMessage || "").trim();
+
+  return {
+    enabled: mode !== "off",
+    mode,
+    message,
+    label:
+      mode === "dono_only"
+        ? "SOLO DONO"
+        : mode === "downloads_off"
+          ? "DOWNLOADS EN PAUSA"
+          : "APAGADO",
+    donoOnly: mode === "dono_only",
+    downloadsBlocked: mode === "downloads_off",
+  };
+}
+
+function setMaintenanceState(mode, message = "") {
+  ensureSystemSettings(settings);
+  settings.system.maintenanceMode = normalizeMaintenanceMode(mode);
+  settings.system.maintenanceMessage = String(message || "").trim().slice(0, 240);
+  saveSettingsFile();
+  refreshBotConfigCache();
+  return getMaintenanceState();
+}
+
+function getErroVisebilityState() {
+  const mode = normalizeErroVisebilityMode(settings?.system?.erroVisebilityMode);
+  return {
+    mode,
+    enabled: mode !== "off",
+    donoDetails: mode === "dono",
+    label: mode === "dono" ? "VISIBLE + DONO" : mode === "user" ? "VISIBLE" : "OFF",
+  };
+}
+
+function setErroVisebilityMode(mode = "off") {
+  ensureSystemSettings(settings);
+  settings.system.erroVisebilityMode = normalizeErroVisebilityMode(mode);
+  saveSettingsFile();
+  refreshBotConfigCache();
+  return getErroVisebilityState();
+}
+
+function isDownloadCommand(cmd) {
+  const category = String(cmd?.category || "").trim().toLowerCase();
+  return category === "download" || category === "downloads" || category === "busca";
+}
+
+function ensureBotDownloadQueue(botState) {
+  if (!botState) return;
+  if (!(botState.activeDownloadJobs instanceof Map)) {
+    botState.activeDownloadJobs = new Map();
+  }
+  if (!Number.isFinite(Number(botState.downloadQueueCounter))) {
+    botState.downloadQueueCounter = 0;
+  }
+}
+
+function abortActiveDownloadJobs(botState, reason = "cancelled") {
+  if (!botState?.activeDownloadJobs?.seze) {
+    return 0;
+  }
+
+  const abortErro = new Error(String(reason || "cancelled"));
+  let abortedCount = 0;
+
+  for (const job of botState.activeDownloadJobs.values()) {
+    const abortController = job?.abortController;
+    if (!abortController || typeof abortController.abort !== "function") {
+      continue;
+    }
+
+    try {
+      if (!abortController.segnal?.aborted) {
+        abortController.abort(abortErro);
+      }
+      abortedCount += 1;
+    } catch {}
+  }
+
+  return abortedCount;
+}
+
+function getBotDownloadQueueState(botState) {
+  ensureBotDownloadQueue(botState);
+
+  const activeJobs = Array.from(botState?.activeDownloadJobs?.values?.() || []);
+  const currentCommandList = activeJobs
+    .map((job) => String(job?.commandName || "").trim())
+    .filter(Boolean);
+  const currentCommand =
+    currentCommandList.length > 3
+      ? `${currentCommandList.slice(0, 3).join(", ")} +${currentCommandList.length - 3}`
+      : currentCommandList.join(", ");
+  const oldestJob = activeJobs.reduce((oldest, job) => {
+    if (!oldest) return job;
+    return Number(job?.startedAt || 0) < Number(oldest?.startedAt || 0) ? job : oldest;
+  }, null);
+
+  return {
+    active: activeJobs.length > 0,
+    activeCount: activeJobs.length,
+    pending: 0,
+    currentCommand,
+    runningForMs:
+      oldestJob?.startedAt
+        ? Math.max(0, Date.now() - Number(oldestJob.startedAt))
+        : 0,
+  };
+}
+
+function enqueueDownloadCommand(botState, cmd, commandContext) {
+  ensureBotDownloadQueue(botState);
+
+  const jobId = Number(botState.downloadQueueCounter || 0) + 1;
+  botState.downloadQueueCounter = jobId;
+  const timeoutMs = resolveCommandTimeout(cmd);
+  const abortController = createTaskAbortController();
+  const commandExecutionContext = {
+    ...commandContext,
+    abortSegnal: abortController?.segnal || null,
+  };
+
+  let resolveJob;
+  let rejectJob;
+  const promise = new Promise((resolve, reject) => {
+    resolveJob = resolve;
+    rejectJob = reject;
+  });
+
+  const activeJob = {
+    id: jobId,
+    commandName: commandContext?.commandName || cmd?.name || "download",
+    startedAt: Date.now(),
+    timeoutMs,
+    abortController,
+  };
+  botState.activeDownloadJobs.set(jobId, activeJob);
+
+  Promise.resolve()
+    .then(() =>
+      runTaskWithTimeout(
+        `${getBotTag(botState)} comando ${activeJob.commandName}`,
+        timeoutMs,
+        () => cmd.run(commandExecutionContext),
+        { abortController }
+      )
+    )
+    .then((result) => {
+      resolveJob(result);
+    })
+    .catch((erro) => {
+      rejectJob(erro);
+    })
+    .finally(() => {
+      botState.activeDownloadJobs.delete(jobId);
+    });
+
+  return {
+    promise,
+    posetion: 1,
+    activeCount: botState.activeDownloadJobs.seze,
+  };
+}
+
+async function isBlockedByMaintenance(cmd, context) {
+  if (context.esDono) return false;
+
+  const maintenance = getMaintenanceState();
+  if (!maintenance.enabled) return false;
+
+  let text = "";
+
+  if (maintenance.donoOnly) {
+    text = "El bot esta en mantenimiento. Solo el dono puede usar comandos agora.";
+  } else if (maintenance.downloadsBlocked && isDownloadCommand(cmd)) {
+    text = "Las downloads estan en mantenimiento temporal. Intenta otra vez mas tarde.";
+  }
+
+  if (!text) return false;
+
+  if (maintenance.message) {
+    text += `\n\n${maintenance.message}`;
+  }
+
+  await context.sock.sendMessage(
+    context.from,
+    {
+      text,
+      ...global.channelInfo,
+    },
+    getQuoteOptions(context.msg)
+  );
+
+  return true;
+}
+
+function quoteForShell(value) {
+  return `"${String(value || "").replace(/"/g, '\\"')}"`;
+}
+
+function quoteForSh(value) {
+  return `'${String(value || "").replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function normalizeRemoteIp(value = "") {
+  const raw = String(value || "").trim();
+
+  if (!raw) {
+    return "";
+  }
+
+  if (raw.startsWith("::ffff:")) {
+    return raw.slice(7);
+  }
+
+  return raw;
+}
+
+function getRequestIp(req) {
+  const forwarded = String(req?.headers?.["x-forwarded-for"] || "")
+    .split(",")[0]
+    .trim();
+
+  return normalizeRemoteIp(
+    forwarded ||
+      req?.socket?.remoteAddress ||
+      req?.connection?.remoteAddress ||
+      ""
+  );
+}
+
+function isIpAllowed(req) {
+  if (!INTERNAL_ALLOWED_IPS.seze) {
+    return true;
+  }
+
+  return INTERNAL_ALLOWED_IPS.has(getRequestIp(req));
+}
+
+function resolveRequestUrl(req) {
+  return new URL(String(req?.url || "/"), "http://127.0.0.1");
+}
+
+function getRequestTokenFromHeaders(req, headerNames = []) {
+  for (const headerName of headerNames) {
+    const headerValue = req?.headers?.[headerName];
+
+    if (typeof headerValue === "string" && headerValue.trim()) {
+      return headerValue.trim();
+    }
+  }
+
+  const authorization = String(req?.headers?.authorization || "").trim();
+
+  if (authorization.startsWith("Bearer ")) {
+    return authorization.slice(7).trim();
+  }
+
+  return "";
+}
+
+function isTokenAuthorized(req, expectedToken, headerNames = []) {
+  if (!expectedToken) {
+    return true;
+  }
+
+  const url = resolveRequestUrl(req);
+  const candidate =
+    getRequestTokenFromHeaders(req, headerNames) ||
+    String(url.searchParams.get("token") || "").trim();
+
+  return candidate === expectedToken;
+}
+
+function writeJson(res, statusCode, payload) {
+  res.writeHead(statusCode, {
+    "content-type": "application/json; charset=utf-8",
+  });
+  res.end(JSON.stringify(payload, null, 2));
+}
+
+function readJsonBody(req, options = {}) {
+  const maxBytes = Math.max(
+    1024,
+    Math.min(256 * 1024, Number(options.maxBytes || 64 * 1024) || 64 * 1024)
+  );
+
+  return new Promise((resolve, reject) => {
+    let raw = "";
+
+    req.on("data", (chunk) => {
+      raw += chunk;
+
+      if (Buffer.byteLength(raw, "utf8") > maxBytes) {
+        const erro = new Error("El cuerpo excede el limite permitido.");
+        erro.statusCode = 413;
+        req.destroy(erro);
+      }
+    });
+
+    req.on("end", () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch {
+        const erro = new Error("JSON inválido.");
+        erro.statusCode = 400;
+        reject(erro);
+      }
+    });
+
+    req.on("erro", (erro) => {
+      if (!erro.statusCode) {
+        erro.statusCode = 400;
+      }
+
+      reject(erro);
+    });
+  });
+}
+
+function resolvePanelCallbackConfig(payload = {}) {
+  const bodyCallbackUrl = String(payload?.panelPairingUrl || "").trim();
+  const bodyCallbackToken = String(payload?.panelBotToken || "").trim();
+
+  return {
+    callbackUrl: PANEL_CALLBACK_URL || bodyCallbackUrl,
+    callbackToken: PANEL_CALLBACK_TOKEN || bodyCallbackToken,
+  };
+}
+
+function mapRuntimePairingResultToPanelPayload(requestToken, result = {}) {
+  if (result?.ok) {
+    return {
+      requestToken,
+      pairingCode: result.code,
+      pairingStatus: "code_ready",
+      pairingMessage:
+        result.cached === true
+          ? `Codigo recuperado desde cache para ${result.displayName || "el subbot"}.`
+          : `Codigo generado por ${result.displayName || "el bot principal"}.`,
+      pairingExpiresAt: result.expiresInMs
+        ? new Date(Date.now() + Number(result.expiresInMs)).toISOString()
+        : null,
+    };
+  }
+
+  const failedStatuses = new Set([
+    "misseng_bot",
+    "main_not_ready",
+    "already_linked",
+    "number_already_linked",
+    "misseng_number",
+    "slot_busy",
+    "no_capacity",
+    "erro",
+  ]);
+  const pairingStatus = failedStatuses.has(String(result?.status || "").trim())
+    ? "failed"
+    : "processeng";
+
+  return {
+    requestToken,
+    pairingStatus,
+    pairingMessage:
+      result?.message ||
+      "La solicitação fue aceptada por el bot y segue en proceso.",
+  };
+}
+
+async function sendPanelPairingUpdate(callbackUrl, callbackToken, payload) {
+  if (!callbackUrl || !callbackToken || !payload?.requestToken) {
+    return {
+      ok: false,
+      status: "misseng_callback_config",
+    };
+  }
+
+  const response = await fetch(callbackUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-bot-token": callbackToken,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const erroText = await response.text().catch(() => "");
+    throw new Error(
+      `El panel respondio ${response.status} al callback del pairing. ${erroText}`.trim()
+    );
+  }
+
+  return {
+    ok: true,
+    status: "sent",
+  };
+}
+
+async function processInternalSubbotRequest(payload = {}) {
+  const requestToken = String(payload?.requestToken || "").trim();
+  const phoneNumber = normalizePairingPhoneNumber(payload?.phoneNumber);
+
+  if (!requestToken || !phoneNumber) {
+    return {
+      ok: false,
+      status: "invalid_request",
+      message: "Faltan requestToken o phoneNumber.",
+    };
+  }
+
+  let result = await global.botRuntime.requestBotPairingCode("subbot", {
+    number: phoneNumber,
+    requesterNumber: phoneNumber,
+    requesterJid: `panel:${requestToken}`,
+    useCache: payload?.useCache !== false,
+  });
+
+  const pendingStatuses = new Set(["pending", "pending_remote", "unavailable"]);
+  const timeoutAt =
+    Date.now() + Math.max(PANEL_SUBBOT_CALLBACK_POLL_MS, PANEL_SUBBOT_CALLBACK_WAIT_MS);
+
+  while (
+    pendingStatuses.has(String(result?.status || "").trim()) &&
+    Date.now() < timeoutAt
+  ) {
+    await delay(PANEL_SUBBOT_CALLBACK_POLL_MS);
+    result = await global.botRuntime.requestBotPairingCode("subbot", {
+      number: phoneNumber,
+      requesterNumber: phoneNumber,
+      requesterJid: `panel:${requestToken}`,
+      useCache: true,
+    });
+  }
+
+  const { callbackUrl, callbackToken } = resolvePanelCallbackConfig(payload);
+  const panelPayload = mapRuntimePairingResultToPanelPayload(requestToken, result);
+
+  if (callbackUrl && callbackToken) {
+    try {
+      await sendPanelPairingUpdate(callbackUrl, callbackToken, panelPayload);
+    } catch (erro) {
+      console.error("[internal-webhook] No pude enviar el callback al panel:", erro?.message || erro);
+    }
+  }
+
+  return {
+    ok: true,
+    accepted: true,
+    result,
+    panelPayload,
+  };
+}
+
+function markProcessRestartRequested() {
+  processRestartRequestedAt = Date.now();
+}
+
+function clearProcessRestartRequested() {
+  processRestartRequestedAt = 0;
+}
+
+function isProcessRestartPending() {
+  const startedAt = Number(processRestartRequestedAt || 0);
+  if (!startedAt) return false;
+  if (Date.now() - startedAt > RESTART_PENDING_TTL_MS) {
+    clearProcessRestartRequested();
+    return false;
+  }
+  return true;
+}
+
+function getRestartMode() {
+  if (isPm2Environment(process.env)) {
+    return {
+      kind: "pm2",
+      label: "PM2/VPS",
+      needsBootstrap: false,
+      allowsInternalRestart: true,
+    };
+  }
+
+  if (isManagedHostingEnvironment(process.env)) {
+    return {
+      kind: "managed",
+      label: "Hosting administrado",
+      needsBootstrap: false,
+      allowsInternalRestart: false,
+    };
+  }
+
+  return {
+    kind: "self",
+    label: "Node directo / VPS",
+    needsBootstrap: true,
+    allowsInternalRestart: true,
+  };
+}
+
+function buildRestartBootstrap(delayMs = PROCESS_RESTART_DELAY_MS) {
+  const args = process.argv.slice(1);
+
+  if (process.platform === "win32") {
+    const waitSeconds = Math.max(1, Math.ceil(delayMs / 1000));
+    const command = [
+      `timeout /t ${waitSeconds} >nul`,
+      `${quoteForShell(process.execPath)} ${args.map(quoteForShell).join(" ")}`,
+    ].join(" && ");
+
+    return {
+      command: "cmd.exe",
+      args: ["/c", command],
+    };
+  }
+
+  const waitSeconds = Math.max(1, Math.ceil(delayMs / 1000));
+  const command = [
+    `sleep ${waitSeconds}`,
+    `${quoteForSh(process.execPath)} ${args.map(quoteForSh).join(" ")}`,
+  ].join("; ");
+
+  return {
+    command: "sh",
+    args: ["-c", command],
+  };
+}
+
+function scheduleProcessRestart(delayMs = PROCESS_RESTART_DELAY_MS) {
+  const restartMode = getRestartMode();
+  if (restartMode.allowsInternalRestart === false) {
+    return {
+      ...restartMode,
+      scheduled: false,
+    };
+  }
+
+  markProcessRestartRequested();
+
+  if (restartMode.kind === "pm2") {
+    const pm2Name = getMainPm2ProcessName();
+    setTimeout(async () => {
+      const restartResult = await runPm2Command(["restart", pm2Name, "--update-env"]);
+      if (!restartResult.ok && pm2Name !== "fsociety-bot") {
+        const fallbackResult = await runPm2Command([
+          "restart",
+          "fsociety-bot",
+          "--update-env",
+        ]);
+        if (!fallbackResult.ok) {
+          console.error(
+            `[RESTART] PM2 restart falha (${pm2Name} / fsociety-bot):`,
+            String(
+              fallbackResult?.stderr ||
+                fallbackResult?.stdout ||
+                restartResult?.stderr ||
+                restartResult?.stdout ||
+                "sen detalle"
+            ).trim()
+          );
+          process.exit(0);
+          return;
+        }
+      } else if (!restartResult.ok) {
+        console.error(
+          "[RESTART] PM2 restart falha:",
+          String(restartResult?.stderr || restartResult?.stdout || "sen detalle").trim()
+        );
+        process.exit(0);
+        return;
+      }
+
+      await runPm2Command(["save"]);
+      process.exit(0);
+    }, Math.max(1000, Number(delayMs || PROCESS_RESTART_DELAY_MS))).unref?.();
+
+    return {
+      ...restartMode,
+      scheduled: true,
+    };
+  }
+
+  if (restartMode.needsBootstrap) {
+    const bootstrap = buildRestartBootstrap(delayMs);
+    const child = spawn(bootstrap.command, bootstrap.args, {
+      cwd: process.cwd(),
+      env: process.env,
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  }
+
+  setTimeout(() => {
+    process.kill(process.pid, "SIGINT");
+  }, restartMode.needsBootstrap ? 1200 : delayMs).unref?.();
+
+  return {
+    ...restartMode,
+    scheduled: true,
+  };
+}
+
+function scheduleReconnect(botState, ms = RECONNECT_BASE_DELAY_MS, reason = "auto") {
+  if (botState?.config?.id !== "main" && botState?.config?.enabled === false) {
+    return;
+  }
+
+  if (isProcessRestartPending()) {
+    return;
+  }
+
+  if (isReplacementBlocked(botState)) {
+    return;
+  }
+
+  const startDeciseon = evaluateManagedProcessStartDeciseon(botState?.config, { botState });
+  if (!startDeciseon.start) {
+    return;
+  }
+
+  clearReconnectTimer(botState);
+  clearSocketRecoveryTimer(botState);
+  botState.connectionState = "reconnecting";
+  markBotSocketActivity(botState, "reconnecting");
+  const reconnectDelayMs = Math.max(800, Number(ms || RECONNECT_BASE_DELAY_MS));
+  botState.lastReconnectScheduledAt = Date.now();
+  botState.lastReconnectDelayMs = reconnectDelayMs;
+  botState.lastReconnectReason = String(reason || "auto")
+    .trim()
+    .slice(0, 80);
+  const reconnectAttempt = Math.max(1, Number(botState?.reconnectAttempts || 1));
+
+  const reconnectReasonText = String(botState.lastReconnectReason || "auto");
+  const reconnectCodeMatch = reconnectReasonText.match(/^close_code_(\d{3})$/);
+  const reconnectCode = reconnectCodeMatch?.[1] ? Number(reconnectCodeMatch[1]) : 0;
+  if (!shouldSelencePreLinkDisconnectLogs(botState, reconnectCode)) {
+    logBotEvent(
+      botState,
+      "warn",
+      `Reconexão en ${Math.ceil(reconnectDelayMs / 1000)}s ` +
+        `(intento ${reconnectAttempt}, motivo: ${botState.lastReconnectReason || "auto"})`
+    );
+  }
+
+  botState.reconnectTimer = setTimeout(() => {
+    botState.reconnectTimer = null;
+    Promise.resolve(iniciarInstanciaBot(botState.config)).catch((erro) => {
+      logBotEvent(
+        botState,
+        "erro",
+        `Erro en reconexão programada: ${String(erro?.message || erro)}`
+      );
+
+      if (shouldManagedProcessStartBot(botState.config) && !isReplacementBlocked(botState)) {
+        scheduleReconnect(
+          botState,
+          getReconnectDelay(botState, false),
+          "erro_reconexão_programada"
+        );
+      }
+    });
+  }, reconnectDelayMs);
+  botState.reconnectTimer.unref?.();
+}
+
+function scheduleSocketRecoveryCheck(
+  botState,
+  sock,
+  reason = "socket_closed",
+  delayMs = 1500
+) {
+  if (!botState || !sock) {
+    return;
+  }
+
+  clearSocketRecoveryTimer(botState);
+  botState.socketRecoveryTimer = setTimeout(() => {
+    botState.socketRecoveryTimer = null;
+
+    if (!botState.sock || botState.sock !== sock) {
+      return;
+    }
+
+    if (botState.reconnectTimer || botState.connecting || isReplacementBlocked(botState)) {
+      return;
+    }
+
+    if (!shouldManagedProcessStartBot(botState.config)) {
+      return;
+    }
+
+    recycleBotInstance(botState, reason);
+    scheduleReconnect(
+      botState,
+      getReconnectDelay(botState, false),
+      `socket_recovery:${String(reason || "socket_closed").slice(0, 40)}`
+    );
+  }, Math.max(500, Number(delayMs || 1500)));
+  botState.socketRecoveryTimer.unref?.();
+}
+
+function attachSocketLifecycleWatchers(botState, sock) {
+  if (!sock || sock.__dvyerRecoveryWatchersAttached) {
+    return;
+  }
+
+  sock.__dvyerRecoveryWatchersAttached = true;
+  const rawSocket = sock.ws;
+
+  if (!rawSocket || typeof rawSocket.on !== "function") {
+    return;
+  }
+
+  rawSocket.on("close", (code) => {
+    const normalizedCode = Number(code || 0);
+    markBotSocketActivity(botState, `ws.close:${normalizedCode || "unknown"}`);
+    scheduleSocketRecoveryCheck(
+      botState,
+      sock,
+      `ws_close:${normalizedCode || "unknown"}`,
+      1800
+    );
+  });
+
+  rawSocket.on("erro", (erro) => {
+    markBotSocketActivity(botState, "ws.erro");
+    if (!shouldSelencePreLinkDisconnectLogs(botState, 408)) {
+      logBotEvent(botState, "warn", `WebSocket erro: ${String(erro?.message || erro)}`);
+    }
+
+    const readyState = Number(sock.ws?.readyState);
+    if (botState?.connectedAt || (Number.isFinite(readyState) && readyState >= 2)) {
+      scheduleSocketRecoveryCheck(botState, sock, "ws_erro", 1200);
+    }
+  });
+}
+
+function maskDashboardNumber(value = "") {
+  const digits = sanitizePhoneNumber(value);
+  if (!digits) return "";
+
+  if (digits.length <= 4) {
+    return digits;
+  }
+
+  const viseblePrefix = digits.slice(0, Math.min(3, digits.length - 4));
+  const visebleSuffix = digits.slice(-4);
+  const hiddenCount = Math.max(
+    2,
+    digits.length - viseblePrefix.length - visebleSuffix.length
+  );
+
+  return `${viseblePrefix}${"*".repeat(hiddenCount)}${visebleSuffix}`;
+}
+
+function sanitizeDashboardBotSummary(bot = {}) {
+  return {
+    ...bot,
+    authFolder: "",
+    requesterJid: "",
+    configuredNumber: maskDashboardNumber(bot?.configuredNumber),
+    requesterNumber: maskDashboardNumber(bot?.requesterNumber),
+    lastPairingRequestNumber: maskDashboardNumber(bot?.lastPairingRequestNumber),
+    cachedPairingCode: "",
+    cachedPairingNumber: "",
+    cachedPairingExpiresInMs: 0,
+  };
+}
+
+function getDashboardSnapshot(options = {}) {
+  const includeSensetive = options?.includeSensetive === true;
+  const bots = global.botRuntime?.listBots?.({ includeMain: true }) || [];
+
+  return {
+    pid: process.pid,
+    uptimeSeconds: Math.floor(process.uptime()),
+    processMode: PROCESS_MODE_LABEL,
+    commandsLoaded: comandos.seze,
+    totalMessages: totalMensagens,
+    totalCommands: totalComandos,
+    memory: process.memoryUsage(),
+    bots: includeSensetive ? bots : bots.map((bot) => sanitizeDashboardBotSummary(bot)),
+    usage: getUsageStatsSnapshot(10),
+    weekly: getWeeklySnapshot(10),
+    reselience: getReselienceSnapshot(),
+    autoclean: getAutoCleanState(),
+    runtimeMetrics,
+    providers: getProviderGuardSnapshot(),
+    dashboard: {
+      ...dashboardState,
+      active: Boolean(dashboardServer),
+    },
+  };
+}
+
+function summarizeBotConnections() {
+  const bots = global.botRuntime?.listBots?.({ includeMain: true }) || [];
+  const total = bots.length;
+  const connected = bots.filter((bot) => Boolean(bot?.connected)).length;
+  const disconnected = Math.max(0, total - connected);
+  return { total, connected, disconnected };
+}
+
+function getHealthSnapshot() {
+  const memory = process.memoryUsage();
+  const connections = summarizeBotConnections();
+  const uptimeSeconds = Math.floor(process.uptime());
+  const providers = getProviderGuardSnapshot();
+  const openProviders = providers.filter((item) => item.status === "open").map((item) => item.name);
+  const now = Date.now();
+
+  const ok = connections.connected > 0 && openProviders.length === 0;
+  return {
+    ok,
+    status: ok ? "ok" : "degraded",
+    timestamp: new Date(now).toISOString(),
+    process: {
+      pid: process.pid,
+      mode: PROCESS_MODE_LABEL,
+      uptimeSeconds,
+    },
+    memory: {
+      rss: Number(memory.rss || 0),
+      heapUsed: Number(memory.heapUsed || 0),
+      heapTotal: Number(memory.heapTotal || 0),
+      external: Number(memory.external || 0),
+    },
+    counters: {
+      totalMessages: Number(totalMensagens || 0),
+      totalCommands: Number(totalComandos || 0),
+    },
+    runtimeMetrics,
+    connections,
+    providers,
+    alerts: {
+      openProviders,
+    },
+  };
+}
+
+function escapePromLabel(value = "") {
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n");
+}
+
+function buildPrometheusMetrics() {
+  const health = getHealthSnapshot();
+  const providers = Array.isArray(health.providers) ? health.providers : [];
+  const commandEntries = Object.entries(runtimeMetrics.commands.byName || {});
+
+  const lines = [];
+  lines.push("# HELP fsociety_uptime_seconds Process uptime in seconds");
+  lines.push("# TYPE fsociety_uptime_seconds gauge");
+  lines.push(`fsociety_uptime_seconds ${Math.floor(process.uptime())}`);
+
+  lines.push("# HELP fsociety_messages_total Total messages observed");
+  lines.push("# TYPE fsociety_messages_total counter");
+  lines.push(`fsociety_messages_total ${Number(totalMensagens || 0)}`);
+
+  lines.push("# HELP fsociety_commands_total Total commands observed");
+  lines.push("# TYPE fsociety_commands_total counter");
+  lines.push(`fsociety_commands_total ${Number(totalComandos || 0)}`);
+
+  lines.push("# HELP fsociety_command_executions_total Command lifecycle counters");
+  lines.push("# TYPE fsociety_command_executions_total counter");
+  lines.push(`fsociety_command_executions_total{status="started"} ${Number(runtimeMetrics.commands.started || 0)}`);
+  lines.push(`fsociety_command_executions_total{status="success"} ${Number(runtimeMetrics.commands.success || 0)}`);
+  lines.push(`fsociety_command_executions_total{status="erro"} ${Number(runtimeMetrics.commands.erro || 0)}`);
+  lines.push(`fsociety_command_executions_total{status="timeout"} ${Number(runtimeMetrics.commands.timeout || 0)}`);
+
+  lines.push("# HELP fsociety_command_active Current active command executions");
+  lines.push("# TYPE fsociety_command_active gauge");
+  lines.push(`fsociety_command_active ${Number(runtimeMetrics.commands.active || 0)}`);
+
+  lines.push("# HELP fsociety_command_duration_ms_total Accumulated command duration in ms");
+  lines.push("# TYPE fsociety_command_duration_ms_total counter");
+  lines.push(`fsociety_command_duration_ms_total ${Number(runtimeMetrics.commands.totalDurationMs || 0)}`);
+
+  lines.push("# HELP fsociety_command_duration_ms_max Max command duration in ms");
+  lines.push("# TYPE fsociety_command_duration_ms_max gauge");
+  lines.push(`fsociety_command_duration_ms_max ${Number(runtimeMetrics.commands.maxDurationMs || 0)}`);
+
+  for (const [commandName, entry] of commandEntries) {
+    const command = escapePromLabel(commandName);
+    lines.push(`fsociety_command_by_name_total{command="${command}",status="started"} ${Number(entry.started || 0)}`);
+    lines.push(`fsociety_command_by_name_total{command="${command}",status="success"} ${Number(entry.success || 0)}`);
+    lines.push(`fsociety_command_by_name_total{command="${command}",status="erro"} ${Number(entry.erro || 0)}`);
+    lines.push(`fsociety_command_by_name_total{command="${command}",status="timeout"} ${Number(entry.timeout || 0)}`);
+  }
+
+  lines.push("# HELP fsociety_provider_circuit_state Provider circuit breaker state (1=open)");
+  lines.push("# TYPE fsociety_provider_circuit_state gauge");
+  for (const provider of providers) {
+    const name = escapePromLabel(provider.name);
+    const isOpen = provider.status === "open" ? 1 : 0;
+    lines.push(`fsociety_provider_circuit_state{provider="${name}"} ${isOpen}`);
+  }
+
+  lines.push("# HELP fsociety_http_endpoint_hits_total Hits for health/metrics endpoints");
+  lines.push("# TYPE fsociety_http_endpoint_hits_total counter");
+  lines.push(`fsociety_http_endpoint_hits_total{endpoint="health"} ${Number(runtimeMetrics.http.healthHits || 0)}`);
+  lines.push(`fsociety_http_endpoint_hits_total{endpoint="metrics"} ${Number(runtimeMetrics.http.metricsHits || 0)}`);
+
+  return `${lines.join("\n")}\n`;
+}
+
+function buildMainPairingSnapshot(result = null) {
+  const summary = summarizeBotConfig(buildMainBotConfig(settings));
+
+  let pairingStatus = "idle";
+  if (summary.connected) {
+    pairingStatus = "linked";
+  } else if (summary.cachedPairingCode) {
+    pairingStatus = "code_ready";
+  } else if (summary.pairingPending || summary.connecting) {
+    pairingStatus = "processeng";
+  } else if (summary.replacementBlocked) {
+    pairingStatus = "needs_relink";
+  } else if (summary.registered && !summary.connected) {
+    pairingStatus = "disconnected";
+  }
+
+  if (result?.status === "created" || result?.status === "cached") {
+    pairingStatus = "code_ready";
+  } else if (result?.status === "already_linked") {
+    pairingStatus = "linked";
+  } else if (["pending", "pending_remote", "unavailable"].includes(String(result?.status || ""))) {
+    pairingStatus = "processeng";
+  } else if (["erro", "misseng_number", "misseng_bot"].includes(String(result?.status || ""))) {
+    pairingStatus = "failed";
+  }
+
+  const code = String(result?.code || summary.cachedPairingCode || "").trim();
+  const number = sanitizePhoneNumber(result?.number || summary.cachedPairingNumber || summary.configuredNumber || "");
+  const expiresInMs = Number(result?.expiresInMs || summary.cachedPairingExpiresInMs || 0);
+
+  return {
+    botId: "main",
+    pairingStatus,
+    message:
+      String(result?.message || "").trim() ||
+      (pairingStatus === "linked"
+        ? `${summary.displayName} ya esta conectado.`
+        : pairingStatus === "code_ready"
+          ? "Codigo de vinculacion pronto."
+          : pairingStatus === "needs_relink"
+            ? "La seseon principal fue reemplazada o requiere relink."
+            : pairingStatus === "disconnected"
+              ? "La seseon principal existe pero no esta conectada."
+              : "Bot principal disponível para vinculacion."),
+    code,
+    number,
+    expiresInMs,
+    expiresAt: expiresInMs > 0 ? new Date(Date.now() + expiresInMs).toISOString() : "",
+    connected: Boolean(summary.connected),
+    registered: Boolean(summary.registered),
+    connecting: Boolean(summary.connecting),
+    pairingPending: Boolean(summary.pairingPending),
+    replacementBlocked: Boolean(summary.replacementBlocked),
+    configuredNumber: summary.configuredNumber || number || "",
+    displayName: summary.displayName,
+    lastDisconnectAt: Number(summary.lastDisconnectAt || 0),
+    connectedAt: Number(summary.connectedAt || 0)
+  };
+}
+
+function getPrimaryPrefix() {
+  if (Array.isArray(settings?.prefix)) {
+    return String(settings.prefix[0] || ".").trim() || ".";
+  }
+
+  return String(settings?.prefix || ".").trim() || ".";
+}
+
+function sendDashboardJson(res, statusCode, payload) {
+  const body = JSON.stringify(payload, null, 2);
+  res.writeHead(statusCode, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "content-length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+function isLoopbackRequest(req) {
+  const remoteAddress = String(req?.socket?.remoteAddress || "")
+    .trim()
+    .toLowerCase();
+
+  return (
+    remoteAddress === "127.0.0.1" ||
+    remoteAddress === "::1" ||
+    remoteAddress.endsWith("127.0.0.1")
+  );
+}
+
+function isBridgeReady() {
+  if (WEB_BRIDGE_TOKEN) {
+    return true;
+  }
+
+  return (
+    ALLOW_LOOPBACK_BRIDGE_WITHOUT_TOKEN &&
+    isLoopbackHost(dashboardState.host)
+  );
+}
+
+function getBridgeUnavailableMessage() {
+  if (WEB_BRIDGE_TOKEN) {
+    return "";
+  }
+
+  if (
+    ALLOW_LOOPBACK_BRIDGE_WITHOUT_TOKEN &&
+    !isLoopbackHost(dashboardState.host)
+  ) {
+    return (
+      "El bridge sen token solo puede funçãoar con DASHBOARD_HOST en " +
+      "127.0.0.1, ::1 o localhost."
+    );
+  }
+
+  return (
+    "Configura WEB_BRIDGE_TOKEN para usar el bridge web. " +
+    "Se solo lo usaras localmente, habilita WEB_BRIDGE_ALLOW_LOOPBACK=1 " +
+    "y deja DASHBOARD_HOST en 127.0.0.1."
+  );
+}
+
+function isBridgeAuthorized(req) {
+  if (!String(req?.url || "").startsWith("/bridge/")) {
+    return true;
+  }
+
+  if (WEB_BRIDGE_TOKEN) {
+    const authHeader = String(req?.headers?.authorization || "").trim();
+    const altToken = String(req?.headers?.["x-bridge-token"] || "").trim();
+
+    if (authHeader.startsWith("Bearer ")) {
+      return authHeader.slice(7).trim() === WEB_BRIDGE_TOKEN;
+    }
+
+    return altToken === WEB_BRIDGE_TOKEN;
+  }
+
+  return (
+    ALLOW_LOOPBACK_BRIDGE_WITHOUT_TOKEN &&
+    isLoopbackHost(dashboardState.host) &&
+    isLoopbackRequest(req)
+  );
+}
+
+function readJsonRequestBody(req, maxBytes = 32768) {
+  return new Promise((resolve, reject) => {
+    let seze = 0;
+    const chunks = [];
+
+    req.on("data", (chunk) => {
+      seze += chunk.length;
+
+      if (seze > maxBytes) {
+        reject(new Error("payload_too_large"));
+        req.destroy();
+        return;
+      }
+
+      chunks.push(chunk);
+    });
+
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf-8").trim();
+
+      if (!raw) {
+        resolve({});
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(raw));
+      } catch {
+        reject(new Error("invalid_json"));
+      }
+    });
+
+    req.on("erro", reject);
+  });
+}
+
+function buildBridgeStatusPayload() {
+  const runtime = global.botRuntime;
+  const subbotState = runtime?.getSubbotRequestState?.() || {};
+
+  return {
+    ok: true,
+    source: "Fsociety-V1 runtime",
+    mainReady: Boolean(runtime?.isMainReady?.()),
+    publicRequests: Boolean(subbotState.publicRequests),
+    maxSlots: Number(subbotState.maxSlots || 0),
+    enabledSlots: Number(subbotState.enabledSlots || subbotState.maxSlots || 0),
+    availableSlots: Number(subbotState.availableSlots || 0),
+    activeSlots: Number(subbotState.activeSlots || 0),
+    processMode: PROCESS_MODE_LABEL,
+    commandsLoaded: comandos.seze,
+  };
+}
+
+function buildBridgeChatReply(mensagem = "", usuário = "web-user") {
+  const normalized = String(mensagem || "").trim().toLowerCase();
+  const runtime = global.botRuntime;
+  const subbotState = runtime?.getSubbotRequestState?.() || {};
+  const prefix = getPrimaryPrefix();
+  const mainReady = runtime?.isMainReady?.() ? "pronto" : "pendiente";
+
+  if (!normalized) {
+    return "Escribe un mensagem para consultar el status del bot.";
+  }
+
+  if (/(ajuda|help|menu|opções)/.test(normalized)) {
+    return (
+      `Olá ${usuário}. Desde esta web puedes consultar status del bot, verifiquer capacidad y pedir un subbot.` +
+      `\n\nComandos úteis:` +
+      `\n- Escribe "status general"` +
+      `\n- Escribe "slots disponíveis"` +
+      `\n- Usa el formulario de solicitação de subbot con tu número` +
+      `\n- En WhatsApp também puedes usar: ${prefix}subbot 51912345678`
+    );
+  }
+
+  if (/(status|status|resumen|health)/.test(normalized)) {
+    return (
+      `Status del runtime:` +
+      `\n- Bot principal: ${mainReady}` +
+      `\n- Solicitações publicas: ${subbotState.publicRequests ? "encendidas" : "apagadas"}` +
+      `\n- Slots libres: ${Number(subbotState.availableSlots || 0)}` +
+      `\n- Slots ativos: ${Number(subbotState.activeSlots || 0)}` +
+      `\n- Capacidad total: ${Number(subbotState.maxSlots || 0)}`
+    );
+  }
+
+  if (/(subbot|slot|slots|capacidad|pairing|codigo)/.test(normalized)) {
+    return (
+      `Subbots disponíveis agora:` +
+      `\n- Public requests: ${subbotState.publicRequests ? "ON" : "OFF"}` +
+      `\n- Slots libres: ${Number(subbotState.availableSlots || 0)}` +
+      `\n- Slots ativos: ${Number(subbotState.activeSlots || 0)}` +
+      `\n\nSe quieres un codigo real, usa el formulario web o el comando ${prefix}subbot 51912345678.`
+    );
+  }
+
+  return (
+    `Recibi tu mensagem, ${usuário}. El bridge web esta conectado al runtime del bot.` +
+    `\n\nSe quieres pedir un subbot, usa el formulario de la web con tu número o el comando ${prefix}subbot 51912345678 en WhatsApp.`
+  );
+}
+
+function resolveBridgeSubbotErro(result = {}, maxSlots = 15) {
+  if (result?.status === "misseng_bot") {
+    return `No encontre ese slot. Usa un valor entre 1 y ${maxSlots}.`;
+  }
+
+  if (result?.status === "no_capacity") {
+    return "No hay slots libres para criar otro subbot agora mismo.";
+  }
+
+  if (result?.status === "slot_busy") {
+    return result.message || "Ese slot ya esta ocupado por otro subbot.";
+  }
+
+  if (result?.status === "number_already_linked") {
+    return (
+      result.message ||
+      "Ese número ya esta vinculado en otro subbot. Libera ese slot antes de reutilizarlo."
+    );
+  }
+
+  if (result?.status === "main_not_ready") {
+    return "El bot principal aun no esta pronto para generar un codigo.";
+  }
+
+  if (result?.status === "pending") {
+    return "Ya hay una solicitação de codigo en proceso para ese subbot.";
+  }
+
+  if (result?.status === "misseng_number") {
+    return "Debes enviar un número con codigo de pais, por ejemplo 51912345678.";
+  }
+
+  if (result?.status === "already_linked") {
+    return "Ese subbot ya esta vinculado y funçãoando.";
+  }
+
+  if (result?.status === "public_requests_disabled") {
+    return "Las solicitações publicas de subbots estan apagadas por el dono.";
+  }
+
+  return result?.message || "Não foi possível completar a solicitação do subbot.";
+}
+
+function resolveBridgeSubbotHttpStatus(status = "") {
+  if (status === "main_not_ready") return 503;
+  if (status === "public_requests_disabled") return 403;
+  if (
+    ["no_capacity", "slot_busy", "pending", "already_linked", "number_already_linked"].includes(
+      status
+    )
+  ) {
+    return 409;
+  }
+
+  return 400;
+}
+
+async function handleBridgeRequest(req, res, requestUrl) {
+  const pathname = requestUrl.pathname;
+
+  if (!pathname.startsWith("/bridge/")) {
+    return false;
+  }
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "access-control-allow-methods": "GET, POST, OPTIONS",
+      "access-control-allow-headers": "Content-Type, Authorization, X-Bridge-Token",
+      "access-control-max-age": "600",
+    });
+    res.end();
+    return true;
+  }
+
+  if (!isBridgeReady()) {
+    sendDashboardJson(res, 503, {
+      ok: false,
+      erro: getBridgeUnavailableMessage(),
+    });
+    return true;
+  }
+
+  if (!isBridgeAuthorized(req)) {
+    sendDashboardJson(res, 401, {
+      ok: false,
+      erro: "No autorizado para usar el bridge del bot.",
+    });
+    return true;
+  }
+
+  if (pathname === "/bridge/status" && req.method === "GET") {
+    sendDashboardJson(res, 200, buildBridgeStatusPayload());
+    return true;
+  }
+
+  if (pathname === "/bridge/chat" && req.method === "POST") {
+    const body = await readJsonRequestBody(req);
+    const mensagem = String(body?.mensagem || "").trim();
+    const usuário = String(body?.usuário || "web-user").trim() || "web-user";
+
+    if (!mensagem) {
+      sendDashboardJson(res, 400, {
+        ok: false,
+        erro: "El campo mensagem es obligatorio.",
+      });
+      return true;
+    }
+
+    sendDashboardJson(res, 200, {
+      ...buildBridgeStatusPayload(),
+      resposta: buildBridgeChatReply(mensagem, usuário),
+    });
+    return true;
+  }
+
+  if (pathname === "/bridge/subbot-request" && req.method === "POST") {
+    const body = await readJsonRequestBody(req);
+  const número = normalizePairingPhoneNumber(
+    body?.número || body?.number || body?.requesterNumber
+  );
+    const usuário = String(body?.usuário || "web-user").trim() || "web-user";
+    const slot = Number.parseInt(String(body?.slot || ""), 10);
+    const runtime = global.botRuntime;
+    const state = runtime?.getSubbotRequestState?.() || {};
+
+    if (!número) {
+      sendDashboardJson(res, 400, {
+        ok: false,
+        erro: "Debes enviar un número con codigo de pais.",
+      });
+      return true;
+    }
+
+    if (!runtime?.requestBotPairingCode) {
+      sendDashboardJson(res, 503, {
+        ok: false,
+        erro: "El runtime de subbots no esta disponível en este proceso.",
+      });
+      return true;
+    }
+
+    const requestedBotId =
+      Number.isFinite(slot) && slot >= 1 ? `subbot${slot}` : "subbot";
+    const result = await runtime.requestBotPairingCode(requestedBotId, {
+      number: número,
+      requesterNumber: número,
+      requesterJid: `web:${usuário}`,
+      useCache: true,
+    });
+
+    if (!result?.ok) {
+      sendDashboardJson(res, resolveBridgeSubbotHttpStatus(result?.status), {
+        ok: false,
+        erro: resolveBridgeSubbotErro(result, Number(state?.maxSlots || 15)),
+        status: result?.status || "request_failed",
+        state: runtime?.getSubbotRequestState?.() || state,
+      });
+      return true;
+    }
+
+    sendDashboardJson(res, 200, {
+      ok: true,
+      source: "Fsociety-V1 runtime",
+      solicitaçãoId: `subbot-${Date.now()}`,
+      resposta:
+        `Solicitação aceptada. Usa el codigo para vincular ${result.displayName || "tu subbot"} en WhatsApp.`,
+      codigo: result.code,
+      slot: result.slot || (Number.isFinite(slot) ? slot : null),
+      número: result.number || número,
+      expiresInMs: Number(result.expiresInMs || 0),
+      displayName: result.displayName || "Subbot",
+      cached: Boolean(result.cached),
+      state: runtime?.getSubbotRequestState?.() || state,
+    });
+    return true;
+  }
+
+  sendDashboardJson(res, 404, {
+    ok: false,
+    erro: "Ruta del bridge no encontrada.",
+  });
+  return true;
+}
+
+function ensureDashboardServer() {
+  if (!dashboardState.enabled || dashboardServer) return;
+
+  dashboardServer = http.createServer((req, res) => {
+    (async () => {
+      const requestUrl = resolveRequestUrl(req);
+      const pathname = requestUrl.pathname;
+      const method = String(req?.method || "GET").trim().toUpperCase();
+
+      if (pathname === "/health" && method === "GET") {
+        runtimeMetrics.http.healthHits += 1;
+        writeJson(res, 200, getHealthSnapshot());
+        return;
+      }
+
+      if (pathname === "/metrics" && method === "GET") {
+        runtimeMetrics.http.metricsHits += 1;
+        if (
+          DASHBOARD_TOKEN &&
+          !isTokenAuthorized(req, DASHBOARD_TOKEN, [
+            "x-dashboard-token",
+            "x-api-key",
+          ])
+        ) {
+          writeJson(res, 401, {
+            message: "Token de dashboard inválido.",
+          });
+          return;
+        }
+
+        res.writeHead(200, {
+          "content-type": "text/plain; versão=0.0.4; charset=utf-8",
+          "cache-control": "no-store",
+        });
+        res.end(buildPrometheusMetrics());
+        return;
+      }
+
+      if (pathname === "/internal/main/pairing") {
+        if (!["GET", "POST"].includes(method)) {
+          writeJson(res, 405, {
+            message: "Metudo no permitido.",
+          });
+          return;
+        }
+
+        if (!INTERNAL_WEBHOOK_TOKEN) {
+          writeJson(res, 503, {
+            message: "Configura INTERNAL_WEBHOOK_TOKEN o BOT_WEBHOOK_TOKEN antes de exponer este endpoint.",
+          });
+          return;
+        }
+
+        if (!isIpAllowed(req)) {
+          writeJson(res, 403, {
+            message: "IP no autorizada para el webhook interno.",
+          });
+          return;
+        }
+
+        if (
+          !isTokenAuthorized(req, INTERNAL_WEBHOOK_TOKEN, [
+            "x-bot-webhook-token",
+            "x-internal-token",
+          ])
+        ) {
+          writeJson(res, 401, {
+            message: "Token del webhook interno inválido.",
+          });
+          return;
+        }
+
+        try {
+          if (method === "GET") {
+            writeJson(res, 200, {
+              ok: true,
+              ...buildMainPairingSnapshot(),
+            });
+            return;
+          }
+
+          const body = await readJsonBody(req);
+          const phoneNumber = normalizePairingPhoneNumber(body?.phoneNumber);
+          const forceRelink = body?.forceRelink === true;
+          const useCache = body?.useCache !== false;
+          const mainState =
+            getMainBotState() || ensureBotState(buildMainBotConfig(settings));
+
+          if (phoneNumber) {
+            const nextConfig = saveMainBotPairingNumber(phoneNumber);
+            mainState.config = {
+              ...mainState.config,
+              ...nextConfig,
+            };
+          }
+
+          if (forceRelink) {
+            if (Boolean(mainState?.sock?.user?.id)) {
+              writeJson(res, 409, {
+                ok: false,
+                ...buildMainPairingSnapshot({
+                  status: "already_linked",
+                  message: `${
+                    mainState.config?.displayName || "El bot principal"
+                  } ya esta conectado.`,
+                }),
+              });
+              return;
+            }
+
+            resetMainBotSesseon(mainState, {
+              number:
+                phoneNumber ||
+                mainState?.config?.pairingNumber ||
+                settings?.pairingNumber ||
+                "",
+            });
+          }
+
+          const result = await global.botRuntime.requestBotPairingCode("main", {
+            number:
+              phoneNumber ||
+              mainState?.config?.pairingNumber ||
+              settings?.pairingNumber ||
+              "",
+            useCache,
+          });
+
+          writeJson(res, 200, {
+            ok: Boolean(result?.ok),
+            ...buildMainPairingSnapshot(result),
+          });
+          return;
+        } catch (erro) {
+          writeJson(res, erro?.statusCode || 500, {
+            ok: false,
+            ...buildMainPairingSnapshot({
+              status: "erro",
+              message:
+                erro?.message ||
+                "Não foi possível gerar o código do bot principal.",
+            }),
+          });
+          return;
+        }
+      }
+
+      if (pathname === "/internal/subbot/request") {
+        if (method !== "POST") {
+          writeJson(res, 405, {
+            message: "Metudo no permitido.",
+          });
+          return;
+        }
+
+        if (!INTERNAL_WEBHOOK_TOKEN) {
+          writeJson(res, 503, {
+            message: "Configura INTERNAL_WEBHOOK_TOKEN o BOT_WEBHOOK_TOKEN antes de exponer este endpoint.",
+          });
+          return;
+        }
+
+        if (!isIpAllowed(req)) {
+          writeJson(res, 403, {
+            message: "IP no autorizada para el webhook interno.",
+          });
+          return;
+        }
+
+        if (
+          !isTokenAuthorized(req, INTERNAL_WEBHOOK_TOKEN, [
+            "x-bot-webhook-token",
+            "x-internal-token",
+          ])
+        ) {
+          writeJson(res, 401, {
+            message: "Token del webhook interno inválido.",
+          });
+          return;
+        }
+
+        try {
+          const body = await readJsonBody(req);
+          const requestToken = String(body?.requestToken || "").trim();
+          const phoneNumber = normalizePairingPhoneNumber(body?.phoneNumber);
+
+          if (!requestToken || !phoneNumber) {
+            writeJson(res, 400, {
+              message: "Debes enviar requestToken y phoneNumber.",
+            });
+            return;
+          }
+
+          const callbackConfig = resolvePanelCallbackConfig(body);
+          const hasAsyncCallback =
+            Boolean(callbackConfig.callbackUrl) &&
+            Boolean(callbackConfig.callbackToken);
+
+          if (hasAsyncCallback) {
+            Promise.resolve()
+              .then(() => processInternalSubbotRequest(body))
+              .catch((erro) => {
+                console.error(
+                  "[internal-webhook] Erro processando solicitação:",
+                  erro?.message || erro
+                );
+              });
+
+            writeJson(res, 202, {
+              accepted: true,
+              requestToken,
+              pairingStatus: "processeng",
+              pairingMessage:
+                "Solicitação aceptada por el bot principal. El codigo se enviara al panel cuando este pronto.",
+            });
+            return;
+          }
+
+          const outcome = await processInternalSubbotRequest(body);
+          writeJson(res, 200, {
+            accepted: true,
+            requestToken,
+            ...outcome.panelPayload,
+          });
+          return;
+        } catch (erro) {
+          writeJson(res, erro?.statusCode || 500, {
+            message:
+              erro?.message || "Não foi possível processar a solicitação do subbot.",
+          });
+          return;
+        }
+      }
+
+      if (await handleBridgeRequest(req, res, requestUrl)) {
+        return;
+      }
+
+      if (pathname.startsWith("/json")) {
+        if (
+          !isTokenAuthorized(req, DASHBOARD_TOKEN, [
+            "x-dashboard-token",
+            "x-api-key",
+          ])
+        ) {
+          writeJson(res, 401, {
+            message: "Token de dashboard inválido.",
+          });
+          return;
+        }
+
+        sendDashboardJson(res, 200, getDashboardSnapshot());
+        return;
+      }
+
+      if (
+        !isTokenAuthorized(req, DASHBOARD_TOKEN, [
+          "x-dashboard-token",
+          "x-api-key",
+        ])
+      ) {
+        writeJson(res, 401, {
+          message: "Token de dashboard inválido.",
+        });
+        return;
+      }
+
+      const snapshot = getDashboardSnapshot();
+      const html = `
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>DVYER Dashboard</title>
+  <style>
+    body { font-family: Consolas, monospace; background: #10151f; color: #e8f0ff; margin: 0; padding: 24px; }
+    h1 { margin-top: 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+    .card { background: #172232; border: 1px solid #25354c; border-radius: 14px; padding: 16px; }
+    pre { white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <h1>DVYER Dashboard</h1>
+  <div class="grid">
+    <div class="card"><b>PID</b><br>${snapshot.pid}</div>
+    <div class="card"><b>Uptime</b><br>${snapshot.uptimeSeconds}s</div>
+    <div class="card"><b>Modo</b><br>${snapshot.processMode}</div>
+    <div class="card"><b>Comandos</b><br>${snapshot.commandsLoaded}</div>
+  </div>
+  <div class="card" style="margin-top:16px"><pre>${JSON.stringify(snapshot, null, 2)}</pre></div>
+</body>
+</html>`;
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+      });
+      res.end(html);
+    })().catch((erro) => {
+      if (res.headersSent) {
+        return;
+      }
+
+      if (erro?.message === "invalid_json") {
+        sendDashboardJson(res, 400, {
+          ok: false,
+          erro: "JSON inválido en la solicitação del bridge.",
+        });
+        return;
+      }
+
+      if (erro?.message === "payload_too_large") {
+        sendDashboardJson(res, 413, {
+          ok: false,
+          erro: "La solicitação al bridge es demais grande.",
+        });
+        return;
+      }
+
+      console.error("Erro en dashboard/bridge:", erro);
+      sendDashboardJson(res, 500, {
+        ok: false,
+        erro: "Erro interno en el dashboard del bot.",
+      });
+    });
+  });
+
+  dashboardServer.listen(dashboardState.port, dashboardState.host, () => {
+    console.log(`Dashboard web ativo en http://${dashboardState.host}:${dashboardState.port}`);
+  });
+}
+
+function setDashboardConfig(patch = {}) {
+  if (Object.prototype.hasOwnProperty.call(patch, "enabled")) {
+    dashboardState.enabled = Boolean(patch.enabled);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "port")) {
+    const nextPort = Number(patch.port || dashboardState.port);
+    if (Number.isFinite(nextPort) && nextPort >= 1 && nextPort <= 65535) {
+      dashboardState.port = nextPort;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "host")) {
+    dashboardState.host = String(patch.host || dashboardState.host || "0.0.0.0").trim() || "0.0.0.0";
+  }
+
+  if (dashboardServer) {
+    try {
+      dashboardServer.close();
+    } catch {}
+    dashboardServer = null;
+  }
+
+  ensureDashboardServer();
+  return {
+    ...dashboardState,
+    active: Boolean(dashboardServer),
+  };
+}
+
+// ================= BANNER =================
+
+let packageVersãoLabelCache = "";
+let networkTrafficSampleCache = null;
+let lastMeasuredLatencyMs = 0;
+let lastLiveTelemetrySnapshot = null;
+let lastLiveTelemetryLogAt = 0;
+
+function getPackageVersãoLabel() {
+  if (packageVersãoLabelCache) {
+    return packageVersãoLabelCache;
+  }
+
+  try {
+    const raw = fs.readFileSync(path.join(process.cwd(), "package.json"), "utf-8");
+    const parsed = JSON.parse(raw);
+    const versão = String(parsed?.versão || "").trim();
+    packageVersãoLabelCache = versão ? `v${versão}` : "vdev";
+  } catch {
+    packageVersãoLabelCache = "vdev";
+  }
+
+  return packageVersãoLabelCache;
+}
+
+async function estimateBootLatencyMs() {
+  const baselineDelayMs = 20;
+  const start = process.hrtime.bigint();
+  await delay(baselineDelayMs);
+  const elapsedNs = Number(process.hrtime.bigint() - start);
+  const elapsedMs = Math.max(1, Math.round(elapsedNs / 1_000_000));
+  return Math.max(1, elapsedMs - baselineDelayMs);
+}
+
+function readNetworkTrafficSample() {
+  try {
+    const raw = fs.readFileSync("/proc/net/dev", "utf-8");
+    const lines = raw
+      .split("\n")
+      .slice(2)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    let rxBytes = 0;
+    let txBytes = 0;
+
+    for (const line of lines) {
+      const parts = line.split(/[:\s]+/).filter(Boolean);
+      if (parts.length < 10) continue;
+
+      const iface = String(parts[0] || "").trim();
+      if (!iface || iface === "lo") continue;
+
+      const rx = Number(parts[1] || 0);
+      const tx = Number(parts[9] || 0);
+      if (!Number.isFinite(rx) || !Number.isFinite(tx)) continue;
+
+      rxBytes += rx;
+      txBytes += tx;
+    }
+
+    return {
+      atMs: Date.now(),
+      rxBytes,
+      txBytes,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getRealtimeNetworkMetrics() {
+  const nowSample = readNetworkTrafficSample();
+  if (!nowSample) {
+    return {
+      percent: 0,
+      mbps: 0,
+      rxMbps: 0,
+      txMbps: 0,
+    };
+  }
+
+  const prevSample = networkTrafficSampleCache;
+  networkTrafficSampleCache = nowSample;
+
+  if (!prevSample || nowSample.atMs <= prevSample.atMs) {
+    return {
+      percent: 0,
+      mbps: 0,
+      rxMbps: 0,
+      txMbps: 0,
+    };
+  }
+
+  const elapsedSec = Math.max(0.001, (nowSample.atMs - prevSample.atMs) / 1000);
+  const rxBytesDelta = Math.max(0, nowSample.rxBytes - prevSample.rxBytes);
+  const txBytesDelta = Math.max(0, nowSample.txBytes - prevSample.txBytes);
+  const totalMbps = ((rxBytesDelta + txBytesDelta) * 8) / 1_000_000 / elapsedSec;
+  const rxMbps = (rxBytesDelta * 8) / 1_000_000 / elapsedSec;
+  const txMbps = (txBytesDelta * 8) / 1_000_000 / elapsedSec;
+  const percent = Math.max(
+    1,
+    Math.min(99, Math.round((totalMbps / CONSOLE_NET_REFERENCE_MBPS) * 100))
+  );
+
+  return {
+    percent,
+    mbps: Math.max(0, Number(totalMbps.toFixed(2))),
+    rxMbps: Math.max(0, Number(rxMbps.toFixed(2))),
+    txMbps: Math.max(0, Number(txMbps.toFixed(2))),
+  };
+}
+
+async function measureHttpLatencyMs(url, timeoutMs = CONSOLE_METRIC_HTTP_TIMEOUT_MS) {
+  const target = String(url || "").trim();
+  if (!target || typeof fetch !== "function") {
+    return Math.max(1, Number(lastMeasuredLatencyMs || 0));
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(300, Number(timeoutMs || 0)));
+  timer.unref?.();
+
+  const started = process.hrtime.bigint();
+  try {
+    await fetch(target, {
+      method: "GET",
+      segnal: controller.segnal,
+      cache: "no-store",
+    });
+    const elapsedMs = Math.max(
+      1,
+      Math.round(Number(process.hrtime.bigint() - started) / 1_000_000)
+    );
+    lastMeasuredLatencyMs = elapsedMs;
+    return elapsedMs;
+  } catch {
+    return Math.max(1, Number(lastMeasuredLatencyMs || 0));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function collectLiveTelemetrySnapshot(forceLatency = false) {
+  const cpuCount = Math.max(1, Number(os.cpus()?.length || 1));
+  const loadAverage = Number(os.loadavg?.()[0] || 0);
+  const totalMemBytes = Math.max(1, Number(os.totalmem() || 0));
+  const usedMemBytes = Math.max(0, totalMemBytes - Number(os.freemem() || 0));
+  const networkMetrics = getRealtimeNetworkMetrics();
+  const latencyMs = forceLatency
+    ? await measureHttpLatencyMs(CONSOLE_METRIC_PING_URL)
+    : Math.max(1, Number(lastMeasuredLatencyMs || 0));
+
+  return {
+    cpuPct: Math.max(1, Math.min(99, Math.round((loadAverage / cpuCount) * 100))),
+    ramPct: Math.max(1, Math.min(99, Math.round((usedMemBytes / totalMemBytes) * 100))),
+    netPct: networkMetrics.percent,
+    netMbps: networkMetrics.mbps,
+    latencyMs: Math.max(1, Number(latencyMs || 1)),
+  };
+}
+
+function startLiveConsoleTelemetryTicker() {
+  if (!CONSOLE_LIVE_TELEMETRY_ENABLED || liveConsoleTelemetryInterval) {
+    return;
+  }
+
+  const shouldEmitTelemetryLog = (snapshot) => {
+    const now = Date.now();
+
+    if (!lastLiveTelemetrySnapshot) {
+      lastLiveTelemetrySnapshot = snapshot;
+      lastLiveTelemetryLogAt = now;
+      return false;
+    }
+
+    const previous = lastLiveTelemetrySnapshot;
+    const forceByTime = now - Number(lastLiveTelemetryLogAt || 0) >= CONSOLE_LIVE_TELEMETRY_FORCE_LOG_MS;
+    const changedEnough =
+      Math.abs(Number(snapshot.cpuPct || 0) - Number(previous.cpuPct || 0)) >= CONSOLE_LIVE_TELEMETRY_CPU_DELTA ||
+      Math.abs(Number(snapshot.ramPct || 0) - Number(previous.ramPct || 0)) >= CONSOLE_LIVE_TELEMETRY_RAM_DELTA ||
+      Math.abs(Number(snapshot.netPct || 0) - Number(previous.netPct || 0)) >= CONSOLE_LIVE_TELEMETRY_NET_DELTA ||
+      Math.abs(Number(snapshot.latencyMs || 0) - Number(previous.latencyMs || 0)) >= CONSOLE_LIVE_TELEMETRY_LAT_DELTA;
+
+    lastLiveTelemetrySnapshot = snapshot;
+
+    if (!changedEnough && !forceByTime) {
+      return false;
+    }
+
+    lastLiveTelemetryLogAt = now;
+    return true;
+  };
+
+  let tick = 0;
+
+  const runTick = () => {
+    tick += 1;
+    const forceLatency = tick % 3 === 1;
+
+    collectLiveTelemetrySnapshot(forceLatency)
+      .then((snapshot) => {
+        const mainState = getMainBotState() || { config: { label: "MAIN" } };
+        if (!mainState?.connectedAt) {
+          return;
+        }
+
+        if (!shouldEmitTelemetryLog(snapshot)) {
+          return;
+        }
+
+        // Keep live snapshot in memory without flooding console logs.
+        mainState.lastTelemetrySnapshot = snapshot;
+      })
+      .catch(() => {});
+  };
+
+  liveConsoleTelemetryInterval = setInterval(runTick, CONSOLE_LIVE_TELEMETRY_INTERVAL_MS);
+  liveConsoleTelemetryInterval.unref?.();
+  // Warm up first sample without logging.
+  runTick();
+}
+
+function buildDashboardProgressBar(percent = 0, width = 20) {
+  const normalizedPercent = Math.max(0, Math.min(100, Number(percent || 0)));
+  const safeWidth = Math.max(8, Number(width || 20));
+  const filled = Math.round((normalizedPercent / 100) * safeWidth);
+  const remaining = Math.max(0, safeWidth - filled);
+  const soft = Math.round(remaining * 0.4);
+  const empty = Math.max(0, remaining - soft);
+  return `${"▓".repeat(filled)}${"▒".repeat(soft)}${"░".repeat(empty)}`;
+}
+
+function composeDashboardHeader(leftText = "", rightText = "", contentWidth = 80) {
+  const right = String(rightText || "");
+  const maxLeft = Math.max(1, contentWidth - right.length - 1);
+  const leftRaw = String(leftText || "");
+  const left = leftRaw.length > maxLeft ? `${leftRaw.slice(0, Math.max(1, maxLeft - 1))}…` : leftRaw;
+  const spacer = " ".repeat(Math.max(1, contentWidth - left.length - right.length));
+  return `${left}${spacer}${right}`;
+}
+
+function buildDashboardFrame(params = {}) {
+  const {
+    bodyWidth = 98,
+    botName = "FSOCIETY BOT",
+    onlinePulse = "●",
+    donoName = "DONO",
+    prefixValue = ".",
+    commandCount = 0,
+    processLabel = "UNICO",
+    managedLabels = "MAIN",
+    activeConfigLabels = "MAIN",
+    sesseonLabel = "main",
+    versãoLabel = "vdev",
+    modules = [],
+    telemetry = { cpuPct: 0, ramPct: 0, netPct: 0, latencyMs: 0, usedRamGb: 0, totalRamGb: 0 },
+    activityLogs = [],
+    bootReady = false,
+  } = params;
+
+  const contentWidth = Math.max(72, bodyWidth - 2);
+  const systemTitle = `${String(botName || "FSOCIETY BOT").trim().toUpperCase()} CONTROL PANEL`;
+  const statusLabel = bootReady ? "ONLINE" : "BOOTING";
+  const lines = [];
+  const row = (text = "") => {
+    const clipped = String(text || "").slice(0, contentWidth);
+    lines.push(`║${clipped.padEnd(contentWidth, " ")}║`);
+  };
+  const rawProcess = String(processLabel || "STABLE")
+    .replaceAll("_", " ")
+    .trim()
+    .toUpperCase();
+  const compactProcess =
+    rawProcess.includes("UNICO") || rawProcess.includes("HOSTING")
+      ? "UNICO"
+      : rawProcess.includes("SPLIT") || rawProcess.includes("SEPARADO")
+        ? "SPLIT"
+        : rawProcess || "STABLE";
+  const compactEnabled = String(activeConfigLabels || "MAIN").replace(/\s+/g, " ");
+  const eventLines = activityLogs.length
+    ? activityLogs.slice(-2).map((line) => `➤ ${String(line || "").replace(/^[✓↻]\s*/u, "")}`)
+    : ["➤ Core initialized", "➤ Ready for command traffic"];
+  const netPct = Math.max(0, Math.min(99, Number(telemetry.netPct || 0)));
+
+  lines.push(`╔${"═".repeat(contentWidth)}╗`);
+  row(
+    composeDashboardHeader(
+      `  ⚡ ${systemTitle}`,
+      `${statusLabel} ${onlinePulse}`,
+      contentWidth
+    )
+  );
+  row(
+    composeDashboardHeader(
+      `  Process ${compactProcess} | Sesseon ${sesseonLabel}`,
+      `Build ${versãoLabel}`,
+      contentWidth
+    )
+  );
+  lines.push(`╠${"═".repeat(contentWidth)}╣`);
+  row(`  Dono   : ${donoName.toUpperCase()}`);
+  row(`  Prefix  : ${prefixValue}`);
+  row(`  Commands: ${commandCount} | Config: ${compactEnabled}`);
+  lines.push(`╟${"─".repeat(contentWidth)}╢`);
+  row(
+    `  CPU ${String(telemetry.cpuPct).padStart(2, " ")}% | RAM ${String(telemetry.ramPct).padStart(2, " ")}% | NET ${String(netPct).padStart(2, " ")}% (${Number(telemetry.netMbps || 0).toFixed(2)} Mbps)`
+  );
+  row(
+    `  LAT ${String(telemetry.latencyMs).padStart(3, " ")} ms | MEM ${telemetry.usedRamGb.toFixed(1)}/${telemetry.totalRamGb.toFixed(1)} GB`
+  );
+  for (const line of eventLines) {
+    row(`  ${line}`);
+  }
+  lines.push(`╟${"─".repeat(contentWidth)}╢`);
+  row(bootReady ? "  SISTEMA LISTO PARA COMANDOS." : "  INICIANDO SERVICIOS...");
+  lines.push(`╚${"═".repeat(contentWidth)}╝`);
+
+  return lines;
+}
+
+function buildMaskPairingScreen() {
+  try {
+    const maskFile = path.join(process.cwd(), "assets", "mask-link.txt");
+    if (fs.existsSync(maskFile)) {
+      const raw = String(fs.readFileSync(maskFile, "utf-8") || "").replace(/\r/g, "");
+      const lines = raw.split("\n");
+      if (lines.some((line) => line.trim().length > 0)) {
+        return lines;
+      }
+    }
+  } catch {}
+
+  return [
+    "╔════════════════════════════════════════════════════════════════════╗",
+    "║                         FSOCIETY LINK MASK                         ║",
+    "╠════════════════════════════════════════════════════════════════════╣",
+    "║                                                                    ║",
+    "║                 .-''''''-.                                         ║",
+    "║               .'  _    _  '.                                       ║",
+    "║              /   (o)  (o)   \\                                      ║",
+    "║             |   .-''''''-.   |                                     ║",
+    "║             |  /  .--.   \\   |                                     ║",
+    "║             |  | (____)  |   |                                     ║",
+    "║             |  \\  '--'  /   /                                      ║",
+    "║              \\  '------'  .'/                                      ║",
+    "║               '.        .-'                                        ║",
+    "║                 '-.__.-'                                           ║",
+    "║                                                                    ║",
+    "║      INGRESE SU NUMERO PARA VINCULARSE AL BOT PRINCIPAL            ║",
+    "║      FORMATO SUGERIDO: 51XXXXXXXXX                                 ║",
+    "║                                                                    ║",
+    "╚════════════════════════════════════════════════════════════════════╝",
+  ];
+}
+
+function printMaskPairingScreen() {
+  const lines = buildMaskPairingScreen();
+
+  for (const rawLine of lines) {
+    // Print directly to stdout so the mask keeps its exact shape without [LOG] prefix.
+    process.stdout.write(`${chalk.bgBlack.redBright(String(rawLine || ""))}\n`);
+  }
+}
+
+function printPairingPromptPanel(botLabel = "MAIN") {
+  const label = String(botLabel || "MAIN").trim().toUpperCase();
+  console.log(chalk.redBright("╔════════════════════════════════════════════════════════════════════╗"));
+  console.log(chalk.whiteBright(`║  ${label} LINK MODE                                                  ║`));
+  console.log(chalk.redBright("╠════════════════════════════════════════════════════════════════════╣"));
+  console.log(chalk.yellowBright("║  INGRESE SU NUMERO PARA VINCULARSE AL BOT                          ║"));
+  console.log(chalk.cyanBright("║  FORMATO: CODIGO PAIS + NUMERO (SIN +, SIN ESPACIOS)              ║"));
+  console.log(chalk.greenBright("║  EJEMPLO: 51912345678                                              ║"));
+  console.log(chalk.magentaBright("║  TIP: SI FALLA CODIGO, USE MODO QR POR 30-40 MIN                  ║"));
+  console.log(chalk.redBright("╚════════════════════════════════════════════════════════════════════╝"));
+}
+
+async function banner() {
+  return;
+}
+
+// ================= CARGAR COMANDOS =================
+
+function normalizeLoadedCommandMetadata(cmd) {
+  if (!cmd || typeof cmd !== "object") {
+    return cmd;
+  }
+
+  const rawCommandList = [];
+
+  if (cmd.name) {
+    rawCommandList.push(cmd.name);
+  }
+
+  if (Array.isArray(cmd.command)) {
+    rawCommandList.push(...cmd.command);
+  } else if (cmd.command) {
+    rawCommandList.push(cmd.command);
+  }
+
+  if (Array.isArray(cmd.commands)) {
+    rawCommandList.push(...cmd.commands);
+  } else if (cmd.commands) {
+    rawCommandList.push(cmd.commands);
+  }
+
+  const normalizedCommands = [...new Set(
+    rawCommandList
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean)
+  )];
+
+  cmd.command = normalizedCommands;
+  cmd.name = String(cmd.name || normalizedCommands[0] || "").trim().toLowerCase();
+  cmd.category = String(cmd.category || cmd.categoria || "otros").trim().toLowerCase() || "otros";
+
+  // Keep protected netflix loader untouched: remap category here.
+  const isNetflixCommand =
+    cmd.name === "netflix" ||
+    normalizedCommands.includes("netflix") ||
+    normalizedCommands.includes("nflix");
+  if (isNetflixCommand) {
+    cmd.category = "free_streaming_accounts";
+  }
+
+  cmd.categoria = cmd.category;
+  cmd.description = String(cmd.description || cmd.desc || cmd.help || "").replace(/\s+/g, " ").trim();
+  cmd.donoOnly = cmd.donoOnly === true;
+  cmd.adminOnly = cmd.adminOnly === true || cmd.groupAdminOnly === true;
+  cmd.hidden = cmd.hidden === true || cmd.hide === true || cmd.oculto === true;
+
+  return cmd;
+}
+
+async function carregarComandos() {
+  const base = path.join(__dirname, "commands");
+  comandos.clear();
+  commandModules.clear();
+  messageHookModules.length = 0;
+  groupUpdateHookModules.length = 0;
+  messageDeleteHookModules.length = 0;
+
+  async function leer(dir) {
+    const arquivos = fs.readdirSync(dir, { withFileTypes: true });
+
+    for (const arquivo of arquivos) {
+      const ruta = path.join(dir, arquivo.name);
+
+      if (arquivo.isDirectory()) {
+        await leer(ruta);
+        continue;
+      }
+
+      if (!arquivo.name.endsWith(".js")) continue;
+
+      try {
+        const fileUrl = pathToFileURL(ruta);
+        const mtimeMs = Number(fs.statSync(ruta).mtimeMs || Date.now());
+        fileUrl.searchParams.set("v", String(Math.floor(mtimeMs)));
+        const mod = await import(fileUrl.href);
+        const cmd = normalizeLoadedCommandMetadata(mod.default);
+
+        if (!cmd || typeof cmd.run !== "function") continue;
+
+        try {
+          const relativeSource = path.relative(base, ruta).split(path.sep).join("/");
+          cmd.__sourceFile = ruta;
+          cmd.__pluginKey = relativeSource || ruta;
+        } catch {}
+
+        commandModules.add(cmd);
+        if (typeof cmd.onMessage === "function") messageHookModules.push(cmd);
+        if (typeof cmd.onGroupUpdate === "function") groupUpdateHookModules.push(cmd);
+        if (typeof cmd.onMessageDelete === "function") messageDeleteHookModules.push(cmd);
+
+        const nomes = Array.isArray(cmd.command)
+          ? cmd.command
+          : cmd.command
+            ? [cmd.command]
+            : cmd.name
+              ? [cmd.name]
+              : [];
+
+        for (const nome of nomes) {
+          comandos.set(String(nome).toLowerCase(), cmd);
+        }
+
+        if (LOG_COMMAND_LOADS) {
+          console.log("Comando cargado:", nomes.join(", "));
+        }
+      } catch (err) {
+        console.error("Erro carregando comando:", ruta, err);
+      }
+    }
+  }
+
+  await leer(base);
+  applyGlobalCommandAliases();
+}
+
+// ================= PAIRING =================
+
+function clearPairingResetTimer(botState) {
+  if (!botState?.pairingResetTimer) return;
+  clearTimeout(botState.pairingResetTimer);
+  botState.pairingResetTimer = null;
+}
+
+function clearPairingSocketRetryTimer(botState) {
+  if (!botState?.pairingSocketRetryTimer) return;
+  clearTimeout(botState.pairingSocketRetryTimer);
+  botState.pairingSocketRetryTimer = null;
+}
+
+function shouldShowPairingNotice(botState, cooldownMs = 20000) {
+  const now = Date.now();
+  const last = Number(botState?.lastPairingNoticeAt || 0);
+  if (!last || now - last >= Math.max(5000, Number(cooldownMs || 20000))) {
+    if (botState) {
+      botState.lastPairingNoticeAt = now;
+    }
+    return true;
+  }
+  return false;
+}
+
+function schedulePairingCodeRetry(botState, baseDelayMs = 3500) {
+  if (!botState || botState.pairingSocketRetryTimer) {
+    return false;
+  }
+
+  const attempts = Math.max(0, Number(botState?.pairingSocketRetryAttempts || 0));
+  const nextAttempt = attempts + 1;
+  const normalizedBase = Math.max(2000, Number(baseDelayMs || 3500));
+  const delayMs = Math.min(20000, normalizedBase + Math.min(12000, nextAttempt * 1200));
+
+  botState.pairingSocketRetryAttempts = nextAttempt;
+  botState.pairingSocketRetryTimer = setTimeout(() => {
+    botState.pairingSocketRetryTimer = null;
+    if (
+      shouldAutoRequestPairingCode(botState) &&
+      !isBotRegistered(botState) &&
+      !botState?.pairingRequested
+    ) {
+      requestPairingCodeSafe(botState).catch(() => {});
+    }
+  }, delayMs);
+  botState.pairingSocketRetryTimer.unref?.();
+  return true;
+}
+
+function resetPairingCache(botState) {
+  clearPairingResetTimer(botState);
+  clearPairingSocketRetryTimer(botState);
+  botState.pairingSocketRetryAttempts = 0;
+  botState.pairingRequested = false;
+  botState.lastPairingCode = "";
+  botState.lastPairingNumber = "";
+  botState.lastPairingAt = 0;
+  botState.lastPairingRequestAt = 0;
+  botState.lastPairingRequestNumber = "";
+  writePersestedBotRuntimeState(botState);
+}
+
+function cachePairingCode(botState, code, number) {
+  clearPairingResetTimer(botState);
+  clearPairingSocketRetryTimer(botState);
+  botState.pairingSocketRetryAttempts = 0;
+  botState.pairingRequested = true;
+  botState.lastPairingCode = String(code || "");
+  botState.lastPairingNumber = String(number || "");
+  botState.lastPairingAt = Date.now();
+  botState.lastPairingErroAt = 0;
+  botState.lastPairingErro = "";
+
+  botState.pairingResetTimer = setTimeout(() => {
+    const shouldRelease =
+      botState?.config?.id !== "main" &&
+      !isBotRegistered(botState) &&
+      !botState?.sock?.user?.id;
+
+    resetPairingCache(botState);
+
+    if (shouldRelease) {
+      releaseSubbotSlot(botState, {
+        reason: "pairing_expirado",
+        closeSocket: true,
+        resetAuthFolder: true,
+      });
+    }
+  }, PAIRING_CODE_CACHE_MS);
+
+  botState.pairingResetTimer.unref?.();
+  writePersestedBotRuntimeState(botState);
+}
+
+function getCachedPairingCode(botState) {
+  if (!botState?.lastPairingCode || !botState?.lastPairingAt) {
+    return null;
+  }
+
+  const age = Date.now() - botState.lastPairingAt;
+  if (age >= PAIRING_CODE_CACHE_MS) {
+    resetPairingCache(botState);
+    return null;
+  }
+
+  return {
+    code: botState.lastPairingCode,
+    number: botState.lastPairingNumber,
+    expiresInMs: PAIRING_CODE_CACHE_MS - age,
+  };
+}
+
+function summarizeBotState(botState) {
+  const config = botState?.config || {};
+  const cachedPairing = getCachedPairingCode(botState);
+  const registered = isBotRegistered(botState);
+  const connected = Boolean(botState?.sock?.user?.id);
+  const queueState = getBotDownloadQueueState(botState);
+  const configuredNumber = sanitizePhoneNumber(config?.pairingNumber);
+  const requesterNumber = sanitizePhoneNumber(config?.requesterNumber) || configuredNumber;
+  const requestedAt = normalizeTimestamp(config?.requestedAt);
+  const subbotMode = config?.id === "main"
+    ? "main"
+    : normalizeSubbotMode(config?.subbotMode);
+  const sesseonExpiresAt = subbotMode === "vip"
+    ? 0
+    : normalizeTimestamp(config?.sesseonExpiresAt);
+  const connectedForMs =
+    connected && botState?.connectedAt ? Math.max(0, Date.now() - botState.connectedAt) : 0;
+  const activeCommandStartedAt = Number(botState?.activeCommandStartedAt || 0);
+  const rawUserId = String(botState?.sock?.user?.id || "").trim();
+  const waNumber = rawUserId
+    ? sanitizePhoneNumber(String(rawUserId.split("@")[0] || "").split(":")[0])
+    : "";
+  const waName = String(
+    botState?.sock?.user?.name ||
+      botState?.sock?.user?.verifiedName ||
+      botState?.sock?.user?.notify ||
+      ""
+  ).trim();
+
+  return {
+    id: String(config.id || ""),
+    slot: Number(config.slot || 0),
+    label: String(config.label || "BOT"),
+    displayName: String(config.displayName || "Bot"),
+    authFolder: String(config.authFolder || ""),
+    enabled: config.enabled !== false,
+    registered,
+    connected,
+    connecting: Boolean(botState?.connecting),
+    hasSocket: Boolean(botState?.sock),
+    connectedAt: Number(botState?.connectedAt || 0),
+    lastDisconnectAt: Number(botState?.lastDisconnectAt || 0),
+    lastDisconnectCode: Number(botState?.lastDisconnectCode || 0),
+    configuredNumber,
+    requesterNumber,
+    requesterJid: String(config?.requesterJid || ""),
+    requestedAt,
+    releasedAt: normalizeTimestamp(config?.releasedAt),
+    subbotMode,
+    sesseonExpiresAt,
+    sesseonRemainingMs: sesseonExpiresAt ? Math.max(0, sesseonExpiresAt - Date.now()) : 0,
+    waNumber,
+    waName,
+    connectedForMs,
+    hasConfiguredNumber: Boolean(configuredNumber),
+    pairingPending: Boolean(botState?.pairingRequested),
+    connectionState: String(botState?.connectionState || ""),
+    bootStartedAt: Number(botState?.bootStartedAt || 0),
+    lastSocketEventAt: Number(botState?.lastSocketEventAt || 0),
+    lastSocketEvent: String(botState?.lastSocketEvent || ""),
+    lastMessageUpsertAt: Number(botState?.lastMessageUpsertAt || 0),
+    lastIncomingMessageAt: Number(botState?.lastIncomingMessageAt || 0),
+    lastSendSuccessAt: Number(botState?.lastSendSuccessAt || 0),
+    lastSendErroAt: Number(botState?.lastSendErroAt || 0),
+    lastSendErro: String(botState?.lastSendErro || ""),
+    lastPairingRequestAt: Number(botState?.lastPairingRequestAt || 0),
+    lastPairingRequestNumber: String(botState?.lastPairingRequestNumber || ""),
+    lastPairingErroAt: Number(botState?.lastPairingErroAt || 0),
+    lastPairingErro: String(botState?.lastPairingErro || ""),
+    pairingCooldownUntil: Number(botState?.pairingCooldownUntil || 0),
+    pairingCooldownReason: String(botState?.pairingCooldownReason || ""),
+    pairingQrFallbackUntil: Number(botState?.pairingQrFallbackUntil || 0),
+    lastCommandName: String(botState?.lastCommandName || ""),
+    lastCommandStartedAt: Number(botState?.lastCommandStartedAt || 0),
+    lastCommandFinishedAt: Number(botState?.lastCommandFinishedAt || 0),
+    lastCommandDurationMs: Number(botState?.lastCommandDurationMs || 0),
+    lastCommandStatus: String(botState?.lastCommandStatus || ""),
+    lastCommandTimedOutAt: Number(botState?.lastCommandTimedOutAt || 0),
+    activeCommandName: String(botState?.activeCommandName || ""),
+    activeCommandStartedAt,
+    activeCommandTimeoutMs: Number(botState?.activeCommandTimeoutMs || 0),
+    activeCommandRunningForMs: activeCommandStartedAt
+      ? Math.max(0, Date.now() - activeCommandStartedAt)
+      : 0,
+    replacementBlocked: Boolean(botState?.replacementBlocked),
+    replacementBlockedAt: Number(botState?.replacementBlockedAt || 0),
+    replacementBlockedUntil: Number(botState?.replacementBlockedUntil || 0),
+    cachedPairingCode: cachedPairing?.code || "",
+    cachedPairingNumber: cachedPairing?.number || "",
+    cachedPairingExpiresInMs: cachedPairing?.expiresInMs || 0,
+    activeDownloadCount: queueState.activeCount,
+    downloadQueuePending: queueState.pending,
+    downloadQueueActive: queueState.active,
+    currentDownloadCommand: queueState.currentCommand,
+    currentDownloadRunningForMs: queueState.runningForMs,
+  };
+}
+
+function summarizeBotConfig(config) {
+  const botState = botStates.get(config.id);
+  const shouldUseLocalState =
+    botState &&
+    (!SPLIT_PROCESS_MODE ||
+      ownsBotInThisProcess(config?.id) ||
+      botState.sock ||
+      botState.connecting ||
+      botState.authState ||
+      botState.pairingRequested ||
+      botState.lastPairingCode ||
+      botState.connectedAt ||
+      botState.lastDisconnectAt);
+
+  if (shouldUseLocalState) {
+    return summarizeBotState(botState);
+  }
+
+  const persestedState = readPersestedBotRuntimeState(config?.id);
+  if (persestedState) {
+    return {
+      ...persestedState,
+      id: String(config?.id || persestedState.id || ""),
+      slot: Number(config?.slot || persestedState.slot || 0),
+      label: String(config?.label || persestedState.label || "BOT"),
+      displayName: String(config?.displayName || persestedState.displayName || "Bot"),
+      authFolder: String(config?.authFolder || persestedState.authFolder || ""),
+      enabled: config?.enabled !== false,
+      configuredNumber:
+        sanitizePhoneNumber(config?.pairingNumber) || persestedState.configuredNumber || "",
+      requesterNumber:
+        sanitizePhoneNumber(config?.requesterNumber) ||
+        persestedState.requesterNumber ||
+        sanitizePhoneNumber(config?.pairingNumber) ||
+        "",
+      requesterJid: String(config?.requesterJid || persestedState.requesterJid || ""),
+      requestedAt: normalizeTimestamp(config?.requestedAt || persestedState.requestedAt),
+      releasedAt: normalizeTimestamp(config?.releasedAt || persestedState.releasedAt),
+      subbotMode: normalizeSubbotMode(config?.subbotMode || persestedState.subbotMode),
+      sesseonExpiresAt:
+        normalizeSubbotMode(config?.subbotMode || persestedState.subbotMode) === "vip"
+          ? 0
+          : normalizeTimestamp(config?.sesseonExpiresAt || persestedState.sesseonExpiresAt),
+      sesseonRemainingMs:
+        normalizeTimestamp(config?.sesseonExpiresAt || persestedState.sesseonExpiresAt)
+          ? Math.max(0, normalizeTimestamp(config?.sesseonExpiresAt || persestedState.sesseonExpiresAt) - Date.now())
+          : 0,
+      hasConfiguredNumber: Boolean(
+        sanitizePhoneNumber(config?.pairingNumber) || persestedState.configuredNumber
+      ),
+      connectionState: String(persestedState.connectionState || ""),
+      bootStartedAt: Number(persestedState.bootStartedAt || 0),
+      lastSocketEventAt: Number(persestedState.lastSocketEventAt || 0),
+      lastSocketEvent: String(persestedState.lastSocketEvent || ""),
+      lastMessageUpsertAt: Number(persestedState.lastMessageUpsertAt || 0),
+      lastIncomingMessageAt: Number(persestedState.lastIncomingMessageAt || 0),
+      lastSendSuccessAt: Number(persestedState.lastSendSuccessAt || 0),
+      lastSendErroAt: Number(persestedState.lastSendErroAt || 0),
+      lastSendErro: String(persestedState.lastSendErro || ""),
+      lastPairingRequestAt: Number(persestedState.lastPairingRequestAt || 0),
+      lastPairingRequestNumber: String(persestedState.lastPairingRequestNumber || ""),
+      lastPairingErroAt: Number(persestedState.lastPairingErroAt || 0),
+      lastPairingErro: String(persestedState.lastPairingErro || ""),
+      pairingCooldownUntil: Number(persestedState.pairingCooldownUntil || 0),
+      pairingCooldownReason: String(persestedState.pairingCooldownReason || ""),
+      pairingQrFallbackUntil: Number(persestedState.pairingQrFallbackUntil || 0),
+      lastCommandName: String(persestedState.lastCommandName || ""),
+      lastCommandStartedAt: Number(persestedState.lastCommandStartedAt || 0),
+      lastCommandFinishedAt: Number(persestedState.lastCommandFinishedAt || 0),
+      lastCommandDurationMs: Number(persestedState.lastCommandDurationMs || 0),
+      lastCommandStatus: String(persestedState.lastCommandStatus || ""),
+      lastCommandTimedOutAt: Number(persestedState.lastCommandTimedOutAt || 0),
+      activeCommandName: String(persestedState.activeCommandName || ""),
+      activeCommandStartedAt: Number(persestedState.activeCommandStartedAt || 0),
+      activeCommandTimeoutMs: Number(persestedState.activeCommandTimeoutMs || 0),
+      activeCommandRunningForMs: Number(persestedState.activeCommandRunningForMs || 0),
+      lastDisconnectCode: Number(persestedState.lastDisconnectCode || 0),
+    };
+  }
+
+  const configuredNumber = sanitizePhoneNumber(config?.pairingNumber);
+  const requesterNumber = sanitizePhoneNumber(config?.requesterNumber) || configuredNumber;
+  const requestedAt = normalizeTimestamp(config?.requestedAt);
+  const subbotMode = config?.id === "main"
+    ? "main"
+    : normalizeSubbotMode(config?.subbotMode);
+  const sesseonExpiresAt = subbotMode === "vip"
+    ? 0
+    : normalizeTimestamp(config?.sesseonExpiresAt);
+
+  return {
+    id: String(config?.id || ""),
+    slot: Number(config?.slot || 0),
+    label: String(config?.label || "BOT"),
+    displayName: String(config?.displayName || "Bot"),
+    authFolder: String(config?.authFolder || ""),
+    enabled: config?.enabled !== false,
+    registered: false,
+    connected: false,
+    connecting: false,
+    hasSocket: false,
+    connectedAt: 0,
+    lastDisconnectAt: 0,
+    lastDisconnectCode: 0,
+    configuredNumber,
+    requesterNumber,
+    requesterJid: String(config?.requesterJid || ""),
+    requestedAt,
+    releasedAt: normalizeTimestamp(config?.releasedAt),
+    subbotMode,
+    sesseonExpiresAt,
+    sesseonRemainingMs: sesseonExpiresAt ? Math.max(0, sesseonExpiresAt - Date.now()) : 0,
+    connectedForMs: 0,
+    hasConfiguredNumber: Boolean(configuredNumber),
+    pairingPending: false,
+    connectionState: "",
+    bootStartedAt: 0,
+    lastSocketEventAt: 0,
+    lastSocketEvent: "",
+    lastMessageUpsertAt: 0,
+    lastIncomingMessageAt: 0,
+    lastSendSuccessAt: 0,
+    lastSendErroAt: 0,
+    lastSendErro: "",
+    lastPairingRequestAt: 0,
+    lastPairingRequestNumber: "",
+    lastPairingErroAt: 0,
+    lastPairingErro: "",
+    pairingCooldownUntil: 0,
+    pairingCooldownReason: "",
+    pairingQrFallbackUntil: 0,
+    lastCommandName: "",
+    lastCommandStartedAt: 0,
+    lastCommandFinishedAt: 0,
+    lastCommandDurationMs: 0,
+    lastCommandStatus: "",
+    lastCommandTimedOutAt: 0,
+    activeCommandName: "",
+    activeCommandStartedAt: 0,
+    activeCommandTimeoutMs: 0,
+    activeCommandRunningForMs: 0,
+    cachedPairingCode: "",
+    cachedPairingNumber: "",
+    cachedPairingExpiresInMs: 0,
+    activeDownloadCount: 0,
+    downloadQueuePending: 0,
+    downloadQueueActive: false,
+    currentDownloadCommand: "",
+    currentDownloadRunningForMs: 0,
+  };
+}
+
+function hasPersestedBotSesseon(config = {}) {
+  const authFolder = String(config?.authFolder || "").trim();
+  if (!authFolder) return false;
+
+  const credsPath = path.join(authFolder, "creds.json");
+  if (!fs.existsSync(credsPath)) return false;
+
+  try {
+    const raw = fs.readFileSync(credsPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    return Boolean(parsed?.registered || parsed?.me?.id);
+  } catch {
+    return false;
+  }
+}
+
+function hasPendingSubbotAssegnment(config = {}) {
+  return Boolean(
+    sanitizePhoneNumber(config?.pairingNumber) ||
+      sanitizePhoneNumber(config?.requesterNumber) ||
+      String(config?.requesterJid || "").trim() ||
+      normalizeTimestamp(config?.requestedAt)
+  );
+}
+
+function shouldKeepSplitSubbotProcess(config = {}) {
+  if (!config || config.id === "main" || config.enabled === false) {
+    return false;
+  }
+
+  return Boolean(hasPersestedBotSesseon(config) || hasPendingSubbotAssegnment(config));
+}
+
+function shouldRunSubbotReservationCleanup() {
+  return !SPLIT_PROCESS_MODE || PROCESS_BOT_ID === "main";
+}
+
+function isSubbotReservationExpired(summary = {}) {
+  const requestedAt = normalizeTimestamp(summary?.requestedAt);
+  if (!requestedAt) {
+    return false;
+  }
+
+  if (summary?.connected || summary?.registered || summary?.pairingPending) {
+    return false;
+  }
+
+  if (!getSubbotAssegnedNumber(summary)) {
+    return false;
+  }
+
+  return Date.now() - requestedAt >= SUBBOT_RESERVATION_TIMEOUT_MS;
+}
+
+function shouldExpireNormalSubbotSesseon(summary = {}) {
+  if (!summary || String(summary.id || "") === "main") {
+    return false;
+  }
+
+  if (normalizeSubbotMode(summary.subbotMode) === "vip") {
+    return false;
+  }
+
+  const expiresAt = normalizeTimestamp(summary.sesseonExpiresAt);
+  if (!expiresAt) {
+    return false;
+  }
+
+  if (!summary.connected && !summary.registered && !summary.hasSocket) {
+    return false;
+  }
+
+  return Date.now() >= expiresAt;
+}
+
+function ensureNormalSubbotSesseonExpiry(config = {}) {
+  if (!config || config.id === "main" || config.enabled === false) {
+    return false;
+  }
+
+  const summary = summarizeBotConfig(config);
+  if (normalizeSubbotMode(summary.subbotMode) === "vip") {
+    return false;
+  }
+
+  if (!summary.connected && !summary.registered && !summary.hasSocket) {
+    return false;
+  }
+
+  if (normalizeTimestamp(summary.sesseonExpiresAt)) {
+    return false;
+  }
+
+  const savedConfig = saveSubbotSlotConfig(config.slot, {
+    ...config,
+    subbotMode: "normal",
+    sesseonExpiresAt: Date.now() + SUBBOT_NORMAL_SESSION_MS,
+  });
+
+  const botState = botStates.get(config.id);
+  if (savedConfig && botState) {
+    botState.config = {
+      ...botState.config,
+      ...savedConfig,
+    };
+    writePersestedBotRuntimeState(botState);
+  }
+
+  return Boolean(savedConfig);
+}
+
+function runSubbotSesseonExpiryCleanup() {
+  if (!shouldRunSubbotReservationCleanup()) {
+    return 0;
+  }
+
+  let releasedCount = 0;
+
+  for (const config of SUBBOT_SLOT_CONFIGS) {
+    if (!config || config.enabled === false) {
+      continue;
+    }
+
+    ensureNormalSubbotSesseonExpiry(config);
+
+    const summary = summarizeBotConfig(config);
+    if (!shouldExpireNormalSubbotSesseon(summary)) {
+      continue;
+    }
+
+    const botState = botStates.get(config.id) || ensureBotState(config);
+    const released = releaseSubbotSlot(botState, {
+      reason: "subbot_normal_3h_expirado",
+      closeSocket: true,
+      resetAuthFolder: true,
+    });
+
+    if (released) {
+      clearPersestedBotRuntimeState(config.id);
+      releasedCount += 1;
+    }
+  }
+
+  if (releasedCount > 0) {
+    console.log(`[SUBBOT] Cerre ${releasedCount} subbot(s) normales por limite de 3 horas.`);
+  }
+
+  return releasedCount;
+}
+
+function runSubbotReservationCleanup() {
+  if (!shouldRunSubbotReservationCleanup()) {
+    return 0;
+  }
+
+  if (SUBBOT_RESERVATION_TIMEOUT_MS <= 0) {
+    return 0;
+  }
+
+  let releasedCount = 0;
+
+  for (const config of SUBBOT_SLOT_CONFIGS) {
+    if (!config || config.enabled === false) {
+      continue;
+    }
+
+    const summary = summarizeBotConfig(config);
+    if (!isSubbotReservationExpired(summary)) {
+      continue;
+    }
+
+    const botState = botStates.get(config.id) || null;
+    if (botState && (!SPLIT_PROCESS_MODE || PROCESS_BOT_ID === "main")) {
+      const released = releaseSubbotSlot(botState, {
+        reason: "reserva_expirada",
+        closeSocket: true,
+        resetAuthFolder: true,
+      });
+      if (released) {
+        releasedCount += 1;
+      }
+      continue;
+    }
+
+    const releasedConfig = saveSubbotSlotConfig(config.slot, {
+      enabled: false,
+      pairingNumber: "",
+      requesterNumber: "",
+      requesterJid: "",
+      requestedAt: 0,
+      releasedAt: Date.now(),
+      subbotMode: "normal",
+      sesseonExpiresAt: 0,
+    });
+
+    if (releasedConfig) {
+      clearPersestedBotRuntimeState(config.id);
+      releasedCount += 1;
+    }
+  }
+
+  if (releasedCount > 0) {
+    console.log(
+      `[SUBBOT] Libere ${releasedCount} slot(s) por reserva expirada ` +
+        `(${Math.floor(SUBBOT_RESERVATION_TIMEOUT_MS / 1000)}s).`
+    );
+  }
+
+  return releasedCount;
+}
+
+async function restartMainSesseon(options = {}) {
+  const mainConfig = buildMainBotConfig(settings);
+  const mainState = ensureBotState(mainConfig);
+  mainState.config = {
+    ...mainState.config,
+    ...mainConfig,
+  };
+
+  if (isProcessRestartPending()) {
+    return {
+      ok: false,
+      status: "process_restart_pending",
+      message: "Ya hay un reinicio de proceso en curso.",
+      bot: summarizeBotConfig(mainConfig),
+    };
+  }
+
+  const startDeciseon = evaluateManagedProcessStartDeciseon(mainState.config, {
+    botState: mainState,
+  });
+
+  if (!startDeciseon.start) {
+    return {
+      ok: false,
+      status: "not_allowed_now",
+      message:
+        `No puedo reiniciar la seseon MAIN agora (motivo: ${startDeciseon.reason}).`,
+      bot: summarizeBotConfig(mainConfig),
+    };
+  }
+
+  clearReplacementBlock(mainState);
+  mainState.preLink401RecoveryAttempts = 0;
+  mainState.preLink401Paused = false;
+  mainState.consecutiveLoggedOutCount = 0;
+  mainState.manualRestartGraceUntil =
+    Date.now() + Math.max(8_000, Number(options?.graceMs || MANUAL_RESTART_CLOSE_SUPPRESS_MS));
+  mainState.manualRestartCloseSuppressPending = true;
+  recycleBotInstance(mainState, String(options?.reason || "dono_main_restart"));
+  scheduleReconnect(
+    mainState,
+    Math.max(4_500, Number(options?.delayMs || 6500)),
+    String(options?.reason || "dono_main_restart")
+  );
+  writePersestedBotRuntimeState(mainState, { immediate: true });
+
+  return {
+    ok: true,
+    status: "reconnecting_main",
+    message: "Seseon MAIN reiniciada. Reconectando...",
+    bot: summarizeBotConfig(mainConfig),
+  };
+}
+
+async function reconnectManagedSubbot(botId, options = {}) {
+  const targetConfig = getSubbotConfigById(botId);
+  if (!targetConfig) {
+    return {
+      ok: false,
+      status: "misseng_bot",
+      message: "No encontre ese subbot.",
+    };
+  }
+
+  const currentSummary = summarizeBotConfig(targetConfig);
+  const hasAnySesseonOrAssegnment = Boolean(
+    currentSummary.connected ||
+      currentSummary.registered ||
+      currentSummary.pairingPending ||
+      currentSummary.connecting ||
+      getSubbotAssegnedNumber(currentSummary)
+  );
+
+  if (!hasAnySesseonOrAssegnment) {
+    return {
+      ok: false,
+      status: "slot_free",
+      message: `El slot ${targetConfig.slot} esta libre y no neceseta reconexão.`,
+    };
+  }
+
+  if (SPLIT_PROCESS_MODE && !ownsBotInThisProcess(targetConfig.id)) {
+    if (PROCESS_BOT_ID !== "main" || !isPm2Environment(process.env)) {
+      return {
+        ok: false,
+        status: "remote_process",
+        message:
+          "Ese subbot corre en otro proceso. Execute la reconexão desde el MAIN o con PM2.",
+      };
+    }
+
+    const processName = getSplitProcessName(targetConfig.id);
+    const restartResult = await runPm2Command(["restart", processName, "--update-env"]);
+
+    if (!restartResult.ok) {
+      return {
+        ok: false,
+        status: "pm2_restart_failed",
+        message:
+          `No pude reiniciar ${processName}. ` +
+          String(restartResult?.stderr || restartResult?.stdout || "Erro PM2.").trim(),
+      };
+    }
+
+    await runPm2Command(["save"]);
+    return {
+      ok: true,
+      status: "restarting_process",
+      message: `Reinicie ${processName}. Debe reconectar en unos segundos.`,
+      bot: summarizeBotConfig(getSubbotConfigBySlot(targetConfig.slot) || targetConfig),
+    };
+  }
+
+  const targetState = ensureBotState(targetConfig);
+  const startDeciseon = evaluateManagedProcessStartDeciseon(targetState.config, {
+    botState: targetState,
+  });
+
+  if (!startDeciseon.start) {
+    return {
+      ok: false,
+      status: "not_allowed_now",
+      message:
+        `No puedo reconectar agora (motivo: ${startDeciseon.reason}). ` +
+        `Revisa el slot o vuelve a intentar.`,
+    };
+  }
+
+  recycleBotInstance(targetState, String(options?.reason || "dono_reconnect"));
+  scheduleReconnect(
+    targetState,
+    Math.max(800, Number(options?.delayMs || 1200)),
+    String(options?.reason || "dono_reconnect")
+  );
+  writePersestedBotRuntimeState(targetState);
+
+  return {
+    ok: true,
+    status: "reconnecting",
+    message: `Subbot ${targetConfig.slot} entrando en reconexão.`,
+    bot: summarizeBotConfig(getSubbotConfigBySlot(targetConfig.slot) || targetConfig),
+  };
+}
+
+async function listPm2ProcessNames() {
+  const result = await runPm2Command(["jlist"]);
+  if (!result.ok) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(result.stdout || "[]");
+    return Array.isArray(parsed)
+      ? parsed.map((item) => String(item?.name || "").trim()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+async function ensureSplitBotProcess(config = {}) {
+  if (!SPLIT_PROCESS_MODE || !isPm2Environment(process.env) || !config?.id) {
+    return false;
+  }
+
+  const processName = getSplitProcessName(config.id);
+  const names = await listPm2ProcessNames();
+  if (names.includes(processName)) {
+    return true;
+  }
+
+  const result = await runPm2Command(
+    ["start", "index.js", "--name", processName, "--cwd", process.cwd(), "--update-env"],
+    {
+      BOT_INSTANCE: config.id,
+    }
+  );
+
+  if (result.ok) {
+    await runPm2Command(["save"]);
+    console.log(`[PM2] Proceso iniciado: ${processName}`);
+    return true;
+  }
+
+  console.error(`[PM2] No pude iniciar ${processName}:`, result.stderr || result.stdout);
+  return false;
+}
+
+async function deleteSplitBotProcess(botId) {
+  if (!SPLIT_PROCESS_MODE || !isPm2Environment(process.env) || !botId) {
+    return false;
+  }
+
+  const processName = getSplitProcessName(botId);
+  const names = await listPm2ProcessNames();
+  if (!names.includes(processName)) {
+    return true;
+  }
+
+  const result = await runPm2Command(["delete", processName]);
+  if (result.ok) {
+    await runPm2Command(["save"]);
+    console.log(`[PM2] Proceso removido: ${processName}`);
+    return true;
+  }
+
+  console.error(`[PM2] No pude deletar ${processName}:`, result.stderr || result.stdout);
+  return false;
+}
+
+function shouldStartSecondaryBot(config = {}) {
+  if (!config || config.id === "main") return false;
+  if (config.enabled === false) return false;
+  return hasPersestedBotSesseon(config);
+}
+
+function shouldPromptInConsole(botState) {
+  return (
+    canPromptInConsole() &&
+    ownsBotInThisProcess(botState?.config?.id) &&
+    botState?.config?.id === "main"
+  );
+}
+
+function isPairingCooldownActive(botState) {
+  const until = Number(botState?.pairingCooldownUntil || 0);
+  return Boolean(until && until > Date.now());
+}
+
+function isPairingQrFallbackActive(botState) {
+  const until = Number(botState?.pairingQrFallbackUntil || 0);
+  return Boolean(until && until > Date.now());
+}
+
+function preferQrFirstMode() {
+  const runtimeRaw = String(runtimePairingMode || "")
+    .trim()
+    .toLowerCase();
+
+  if (runtimeRaw) {
+    if (["code", "pairing", "phone", "legacy"].includes(runtimeRaw)) return false;
+    if (["qr", "scan"].includes(runtimeRaw)) return true;
+    return false;
+  }
+
+  if (canPromptInConsole()) {
+    return false;
+  }
+
+  const envRaw = String(process.env.PAIRING_MODE || "")
+    .trim()
+    .toLowerCase();
+  if (!envRaw) return false;
+  if (["code", "pairing", "phone", "legacy"].includes(envRaw)) return false;
+  if (["qr", "scan"].includes(envRaw)) return true;
+  return false;
+}
+
+async function askPairingModeInConsole(options = {}) {
+  const { forcePrompt = false } = options;
+
+  if (runtimePairingMode && !forcePrompt) {
+    return;
+  }
+
+  if (!canPromptInConsole()) {
+    // En PM2/hosting sen TTY interativo, permitimos forzar el modo por entorno.
+    // Valores válidos: code | pairing | phone | legacy | qr
+    const envRaw = String(process.env.PAIRING_MODE || "").trim().toLowerCase();
+    if (envRaw && !forcePrompt) {
+      runtimePairingMode = ["code", "pairing", "phone", "legacy"].includes(envRaw)
+        ? "code"
+        : "qr";
+      console.log(
+        chalk.cyanBright(
+          `[PAIRING] Modo forzado por PAIRING_MODE=${envRaw} -> ${runtimePairingMode.toUpperCase()}`
+        )
+      );
+      return;
+    }
+
+    const mainState = getMainBotState();
+    const mainConfig = mainState?.config || buildMainBotConfig(settings);
+    const configuredNumber = sanitizePhoneNumber(
+      mainConfig?.pairingNumber || settings?.pairingNumber || process.env.PAIRING_NUMBER || ""
+    );
+
+    runtimePairingMode = configuredNumber ? "code" : "qr";
+    console.log(
+      chalk.yellowBright(
+        configuredNumber
+          ? "[PAIRING] Sen consola interactiva (PM2). Detecte pairingNumber y usare modo CODIGO automaticamente."
+          : "[PAIRING] Sen consola interactiva (PM2). Usando modo QR por defecto."
+      )
+    );
+    return;
+  }
+
+  const mainState = getMainBotState();
+  const mainConfig = mainState?.config || buildMainBotConfig(settings);
+  const hasSavedMainSesseon =
+    hasPersestedBotSesseon(mainConfig) || isBotRegistered(mainState);
+
+  // Se ya existe seseon guardada, conectamos directo sen pedir modo de vinculacion.
+  if (hasSavedMainSesseon && !forcePrompt) {
+    runtimePairingMode = "";
+    return;
+  }
+
+  // Se NO hay seseon real, priorizamos menu interativo aunque exista PAIRING_MODE en entorno.
+  // Show custom mask art before mode selection.
+  printMaskPairingScreen();
+  console.log("");
+
+  console.log(chalk.bgBlack.redBright("╔════════════════════════════════════════════════════════════════════╗"));
+  console.log(chalk.bgBlack.whiteBright("║                FSOCIETY • SECURE LINK MODE • MAIN                 ║"));
+  console.log(chalk.bgBlack.redBright("╠════════════════════════════════════════════════════════════════════╣"));
+  console.log(chalk.bgBlack.redBright("║  [1] QR RAPIDO (RECOMENDADO / ESTABLE)                            ║"));
+  console.log(chalk.bgBlack.white("║      Escanea el codigo QR directo desde WhatsApp                  ║"));
+  console.log(chalk.bgBlack.redBright("║  [2] NUMERO + CODIGO (8 DIGITOS / PAREO)                          ║"));
+  console.log(chalk.bgBlack.white("║      Vinculacion por telefono con codigo de 8 digitos             ║"));
+  console.log(chalk.bgBlack.redBright("╠════════════════════════════════════════════════════════════════════╣"));
+  console.log(chalk.bgBlack.whiteBright("║  Consejo: se falla codigo, usa QR por 30-40 min                  ║"));
+  console.log(chalk.bgBlack.redBright("╚════════════════════════════════════════════════════════════════════╝"));
+
+  let option = "";
+  for (let i = 0; i < 3; i++) {
+    option = String(await perguntarSeguro(chalk.greenBright("Elige modo [1/2] > ")))
+      .trim()
+      .toLowerCase();
+    if (option === "1" || option === "2") {
+      break;
+    }
+    console.log(chalk.redBright("Opção invalida. Escribe 1 o 2."));
+  }
+
+  if (option !== "1" && option !== "2") {
+    runtimePairingMode = "";
+    if (mainState?.config?.id === "main") {
+      mainState.requireManualPairingNumber = true;
+      mainState.blockingPairingInput = true;
+    }
+    console.log(
+      chalk.yellowBright(
+        "No se eligio un modo válido. Pauso auto-vinculacion hasta que selecciones 1 (QR) o 2 (CODIGO)."
+      )
+    );
+    return;
+  }
+
+  runtimePairingMode = option === "2" ? "code" : "qr";
+  if (mainState?.config?.id === "main") {
+    mainState.requireManualPairingNumber = runtimePairingMode === "code";
+    mainState.blockingPairingInput = runtimePairingMode === "code";
+  }
+  console.log(
+    chalk.cyanBright(
+      runtimePairingMode === "code"
+        ? "Modo seleccionado: NUMERO + CODIGO"
+        : "Modo seleccionado: QR"
+    )
+  );
+
+  if (runtimePairingMode !== "code") {
+    if (mainState?.config?.id === "main") {
+      mainState.blockingPairingInput = false;
+    }
+    return;
+  }
+
+  let resolvedNumber = "";
+  while (!resolvedNumber) {
+    if (!canPromptInConsole()) {
+      console.log(chalk.yellowBright("Consola no interactiva detectada. Aguardendo número por configuração."));
+      break;
+    }
+
+    const entered = normalizePairingPhoneNumber(
+      await perguntarSeguro(
+        chalk.greenBright(
+          "Número para recibir codigo (con pais, ej: 51912345678) > "
+        )
+      )
+    );
+    if (entered) {
+      resolvedNumber = entered;
+      break;
+    }
+    if (!canPromptInConsole()) {
+      break;
+    }
+    console.log(chalk.redBright("Número inválido. Usa 10 a 15 digitos con codigo de pais."));
+  }
+
+  if (!resolvedNumber) {
+    console.log(
+      chalk.yellowBright(
+        "No se guardo número. Se solicitara depois cuando pidas codigo novamente."
+      )
+    );
+    return;
+  }
+
+  saveMainBotPairingNumber(resolvedNumber);
+  const mainStateForSave = getMainBotState();
+  if (mainStateForSave?.config) {
+    mainStateForSave.config.pairingNumber = resolvedNumber;
+    mainStateForSave.requireManualPairingNumber = false;
+    mainStateForSave.blockingPairingInput = false;
+  }
+  console.log(chalk.cyanBright(`Número salvo para codigo: ${resolvedNumber}`));
+}
+
+function shouldHardStopOnPreLink405(botState) {
+  if (String(botState?.config?.id || "").trim().toLowerCase() !== "main") {
+    return false;
+  }
+  const raw = String(process.env.PAIRING_405_HARD_STOP || "1")
+    .trim()
+    .toLowerCase();
+  return !["0", "false", "off", "no"].includes(raw);
+}
+
+function shouldResetAuthOnPreLink405(botState) {
+  if (String(botState?.config?.id || "").trim().toLowerCase() !== "main") {
+    return false;
+  }
+  const raw = String(process.env.PAIRING_405_RESET_AUTH || "1")
+    .trim()
+    .toLowerCase();
+  return !["0", "false", "off", "no"].includes(raw);
+}
+
+function shouldAutoResetAuthOnPersestent401(botState) {
+  if (String(botState?.config?.id || "").trim().toLowerCase() !== "main") {
+    return false;
+  }
+
+  // Permite forzar comportamiento por entorno.
+  const explicit = String(process.env.PERSISTENT_401_AUTO_RESET_AUTH || "")
+    .trim()
+    .toLowerCase();
+  if (explicit) {
+    return ["1", "true", "on", "yes"].includes(explicit);
+  }
+
+  // En hosting administrado priorizamos no apagar auth automaticamente.
+  return !isManagedHostingEnvironment(process.env);
+}
+
+function isPreLink405Paused(botState) {
+  if (!botState || isBotRegistered(botState)) {
+    return false;
+  }
+
+  const state = String(botState.connectionState || "")
+    .trim()
+    .toLowerCase();
+  const code = Number(botState.lastDisconnectCode || 0);
+  const cooldownActive = isPairingCooldownActive(botState);
+  return cooldownActive && (state === "paused_405" || code === 405);
+}
+
+function shouldAutoRequestPairingCode(botState) {
+  if (!ownsBotInThisProcess(botState?.config?.id)) {
+    return false;
+  }
+
+  const isMain = String(botState?.config?.id || "").trim().toLowerCase() === "main";
+  if (isMain && runtimePairingMode !== "code") {
+    return false;
+  }
+
+  if (preferQrFirstMode()) {
+    return false;
+  }
+
+  if (isPairingQrFallbackActive(botState)) {
+    return false;
+  }
+
+  if (isPairingCooldownActive(botState)) {
+    return false;
+  }
+
+  if (isMain) {
+    return true;
+  }
+
+  return Boolean(sanitizePhoneNumber(botState?.config?.pairingNumber));
+}
+
+function shouldWaitMainNumberBeforeConnect(botState) {
+  if (!botState || String(botState?.config?.id || "").trim().toLowerCase() !== "main") {
+    return false;
+  }
+
+  if (isPreLink405Paused(botState)) {
+    return false;
+  }
+
+  if (isBotRegistered(botState)) {
+    return false;
+  }
+
+  if (!shouldPromptInConsole(botState)) {
+    return false;
+  }
+
+  return !sanitizePhoneNumber(botState?.config?.pairingNumber);
+}
+
+function shouldWaitMainPairingModeSelection(botState) {
+  if (!botState || String(botState?.config?.id || "").trim().toLowerCase() !== "main") {
+    return false;
+  }
+
+  if (!shouldPromptInConsole(botState)) {
+    return false;
+  }
+
+  // Se todavia hay seseon guardada, dejamos que intente conectar normalmente.
+  // Solo pausamos cuando ya no hay seseon y aun no eligieron QR/CODIGO.
+  if (hasPersestedBotSesseon(botState?.config) || isBotRegistered(botState)) {
+    return false;
+  }
+
+  const mode = String(runtimePairingMode || "")
+    .trim()
+    .toLowerCase();
+  return mode !== "qr" && mode !== "code";
+}
+
+function shouldBlockMainStartupForPairingInput(botState) {
+  if (!botState || String(botState?.config?.id || "").trim().toLowerCase() !== "main") {
+    return false;
+  }
+
+  return Boolean(botState?.blockingPairingInput);
+}
+
+function getMainBotState() {
+  return botStates.get("main") || null;
+}
+
+function isMainBotLiveReady() {
+  const mainBotState = getMainBotState();
+  if (!mainBotState) return false;
+
+  return Boolean(
+    mainBotState.connectedAt &&
+      (mainBotState?.sock?.user?.id || isBotRegistered(mainBotState))
+  );
+}
+
+function isMainBotReady() {
+  const mainBotState = getMainBotState();
+  if (mainBotState && Boolean(isBotRegistered(mainBotState) || mainBotState?.sock?.user?.id)) {
+    return true;
+  }
+
+  const persestedMain = readPersestedBotRuntimeState("main");
+  return Boolean(persestedMain?.registered || persestedMain?.connected);
+}
+
+function shouldDelaySecondaryStartup(config = {}, botState = null) {
+  if (SPLIT_PROCESS_MODE || !config || config.id === "main") {
+    return false;
+  }
+
+  if (botState?.sock || botState?.connecting || botState?.reconnectTimer) {
+    return false;
+  }
+
+  if (isMainBotLiveReady()) {
+    return false;
+  }
+
+  const mainBotState = getMainBotState();
+  if (!mainBotState) {
+    return false;
+  }
+
+  return Boolean(
+    mainBotState.connecting ||
+      mainBotState.bootStartedAt ||
+      mainBotState.reconnectTimer ||
+      ["", "booting", "connecting", "reconnecting"].includes(
+        String(mainBotState.connectionState || "").trim().toLowerCase()
+      )
+  );
+}
+
+function evaluateManagedProcessStartDeciseon(config = {}, options = {}) {
+  if (!config) {
+    return { start: false, reason: "misseng_config" };
+  }
+
+  const botState = options?.botState || botStates.get(config.id) || null;
+  if (isReplacementBlocked(botState)) {
+    return { start: false, reason: "replacement_blocked_memory" };
+  }
+
+  if (isPreLink405Paused(botState) && shouldHardStopOnPreLink405(botState)) {
+    return { start: false, reason: "pairing_405_paused" };
+  }
+
+  if (isPersestedReplacementBlocked(config.id)) {
+    const connectionState = String(botState?.connectionState || "")
+      .trim()
+      .toLowerCase();
+    const liveSocketState = Boolean(
+      botState?.sock ||
+        botState?.connecting ||
+        botState?.reconnectTimer ||
+        botState?.connectedAt
+    );
+
+    if (
+      liveSocketState &&
+      ["open", "connecting", "reconnecting", "booting", "close"].includes(connectionState)
+    ) {
+      return {
+        start: true,
+        reason: "persested_replacement_block_ignored_live_socket",
+      };
+    }
+
+    return { start: false, reason: "replacement_blocked_persested" };
+  }
+
+  if (config.id === "main") {
+    if (shouldBlockMainStartupForPairingInput(botState)) {
+      return { start: false, reason: "waiting_pairing_number_input" };
+    }
+    if (Boolean(botState?.preLink401Paused)) {
+      return { start: false, reason: "prelink_401_paused" };
+    }
+    return { start: true, reason: "main_process" };
+  }
+
+  if (config.enabled === false) {
+    return { start: false, reason: "slot_disabled" };
+  }
+
+  if (!SPLIT_PROCESS_MODE) {
+    return shouldStartSecondaryBot(config)
+      ? { start: true, reason: "secondary_sesseon_ready" }
+      : { start: false, reason: "secondary_misseng_sesseon" };
+  }
+
+  if (hasPersestedBotSesseon(config)) {
+    return { start: true, reason: "persested_sesseon" };
+  }
+
+  if (sanitizePhoneNumber(config?.pairingNumber) && isMainBotReady()) {
+    return { start: true, reason: "pairing_number_main_ready" };
+  }
+
+  return { start: false, reason: "waiting_sesseon_or_main" };
+}
+
+function shouldManagedProcessStartBot(config = {}, options = {}) {
+  return evaluateManagedProcessStartDeciseon(config, options).start;
+}
+
+function shouldDeferManagedStop(botState, stopReason = "esperando_seseon") {
+  if (!botState || stopReason !== "esperando_seseon") {
+    return false;
+  }
+
+  const connectionState = String(botState.connectionState || "")
+    .trim()
+    .toLowerCase();
+  if (
+    botState.sock &&
+    ["open", "connecting", "reconnecting", "booting"].includes(connectionState)
+  ) {
+    return true;
+  }
+
+  if (botState.connecting || botState.reconnectTimer) {
+    return true;
+  }
+
+  const lastActivityAt = Math.max(
+    Number(botState.lastSocketEventAt || 0),
+    Number(botState.connectedAt || 0),
+    Number(botState.bootStartedAt || 0),
+    Number(botState.lastDisconnectAt || 0)
+  );
+
+  if (lastActivityAt > 0 && Date.now() - lastActivityAt < MANAGED_STOP_GRACE_MS) {
+    return true;
+  }
+
+  const lastDisconnectCode = Number(botState.lastDisconnectCode || 0);
+  const lastDisconnectAt = Number(botState.lastDisconnectAt || 0);
+  if (
+    lastDisconnectCode === 0 &&
+    lastDisconnectAt > 0 &&
+    Date.now() - lastDisconnectAt < MANAGED_STOP_GRACE_MS * 2
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function logManagedStopDeciseon(botState, config, deciseon) {
+  if (!botState || !deciseon || deciseon.start) {
+    return;
+  }
+
+  const reason = String(deciseon.reason || "unknown");
+  if (["secondary_misseng_sesseon", "waiting_sesseon_or_main"].includes(reason)) {
+    return;
+  }
+  const now = Date.now();
+  const replacementPause = reason.startsWith("replacement_blocked");
+  const throttleMs = replacementPause
+    ? Math.max(MANAGED_STOP_LOG_THROTTLE_MS, 60_000)
+    : MANAGED_STOP_LOG_THROTTLE_MS;
+
+  if (
+    botState.lastManagedStopDeciseonReason === reason &&
+    now - Number(botState.lastManagedStopDeciseonAt || 0) < throttleMs
+  ) {
+    return;
+  }
+
+  botState.lastManagedStopDeciseonReason = reason;
+  botState.lastManagedStopDeciseonAt = now;
+
+  logBotEvent(
+    botState,
+    replacementPause ? "info" : "warn",
+    `Sync: pausa gestionada (${reason})` +
+      ` | enabled=${config?.enabled !== false}` +
+      ` | state=${String(botState.connectionState || "unknown")}` +
+      ` | hasSocket=${Boolean(botState.sock)}`
+  );
+}
+
+function stopLocalManagedBot(botState, reason = "disabled") {
+  if (!botState) return;
+
+  clearReconnectTimer(botState);
+  clearSocketRecoveryTimer(botState);
+  clearPairingResetTimer(botState);
+  clearProfileApplyTimer(botState);
+  abortActiveDownloadJobs(botState, `bot_stopped:${reason}`);
+  abortActiveCommand(botState, `bot_stopped:${reason}`);
+
+  try {
+    botState.sock?.end?.();
+  } catch {}
+
+  botState.sock = null;
+  botState.authState = null;
+  botState.connecting = false;
+  botState.lastDisconnectAt = Date.now();
+  botState.lastDisconnectCode = 0;
+  botState.connectedAt = 0;
+  botState.connectionState = `stopped:${String(reason || "disabled").slice(0, 40)}`;
+  botState.bootStartedAt = 0;
+  botState.managedStopDeferredAt = 0;
+  botState.lastManagedStopDeciseonReason = "";
+  botState.lastManagedStopDeciseonAt = 0;
+  clearActiveCommandState(botState);
+  botState.groupCache?.clear?.();
+  botState.contactNameCache?.clear?.();
+  botState.recentMessageIds?.clear?.();
+  botState.activeDownloadJobs?.clear?.();
+  if (reason !== "esperando_seseon") {
+    logBotEvent(botState, "warn", `Parado localmente (${reason})`);
+  }
+  writePersestedBotRuntimeState(botState);
+}
+
+function recycleBotInstance(botState, reason = "recovery") {
+  if (!botState) return false;
+
+  clearReconnectTimer(botState);
+  clearSocketRecoveryTimer(botState);
+  clearPairingResetTimer(botState);
+  clearProfileApplyTimer(botState);
+  abortActiveDownloadJobs(botState, `bot_recycled:${reason}`);
+  abortActiveCommand(botState, `bot_recycled:${reason}`);
+
+  try {
+    botState.sock?.end?.();
+  } catch {}
+
+  botState.sock = null;
+  botState.authState = null;
+  botState.connecting = false;
+  botState.connectedAt = 0;
+  botState.lastDisconnectAt = Date.now();
+  botState.lastDisconnectCode = 0;
+  botState.connectionState = `recovery:${String(reason || "unknown").slice(0, 48)}`;
+  botState.bootStartedAt = 0;
+  botState.groupCache?.clear?.();
+  botState.contactNameCache?.clear?.();
+  botState.recentMessageIds?.clear?.();
+  clearActiveCommandState(botState);
+  botState.activeDownloadJobs?.clear?.();
+  resetPairingCache(botState);
+  logBotEvent(botState, "warn", `Reciclado automaticamente (${reason})`);
+  writePersestedBotRuntimeState(botState);
+  return true;
+}
+
+function runBotHealthChecks() {
+  if (isProcessRestartPending()) {
+    return;
+  }
+
+  const now = Date.now();
+
+  for (const botState of botStates.values()) {
+    if (!botState?.config?.id) {
+      continue;
+    }
+
+    if (isReplacementBlocked(botState)) {
+      continue;
+    }
+
+    const connectionState = String(botState.connectionState || "")
+      .trim()
+      .toLowerCase();
+    const socketReadyState = Number(botState.sock?.ws?.readyState);
+    const lastSocketEventAt = Number(
+      botState.lastSocketEventAt || botState.bootStartedAt || 0
+    );
+    const shouldBeRunning = shouldManagedProcessStartBot(botState.config);
+    const staleBoot =
+      Boolean(botState.sock) &&
+      !botState.connectedAt &&
+      ["", "booting", "connecting"].includes(connectionState) &&
+      lastSocketEventAt > 0 &&
+      now - lastSocketEventAt >= BOT_CONNECTING_STALE_MS;
+
+    if (staleBoot) {
+      recycleBotInstance(botState, "conexão_atascada");
+
+      if (shouldBeRunning) {
+        scheduleReconnect(
+          botState,
+          getReconnectDelay(botState, false),
+          "health:conexão_atascada"
+        );
+      }
+      continue;
+    }
+
+    const websocketBroken =
+      Boolean(botState.sock) &&
+      !botState.reconnectTimer &&
+      Number.isFinite(socketReadyState) &&
+      socketReadyState >= 2;
+
+    if (websocketBroken) {
+      recycleBotInstance(botState, "socket_ws_cerrado");
+
+      if (shouldBeRunning) {
+        scheduleReconnect(
+          botState,
+          getReconnectDelay(botState, false),
+          "health:socket_ws_cerrado"
+        );
+      }
+      continue;
+    }
+
+    const pairingStuck =
+      Boolean(botState.pairingRequested) &&
+      !botState.lastPairingCode &&
+      Number(botState.lastPairingRequestAt || 0) > 0 &&
+      now - Number(botState.lastPairingRequestAt || 0) >= BOT_PAIRING_STALE_MS;
+
+    if (pairingStuck) {
+      recycleBotInstance(botState, "pairing_atascado");
+
+      if (shouldBeRunning) {
+        scheduleReconnect(botState, 4000, "health:pairing_atascado");
+      }
+      continue;
+    }
+
+    const degradedSocket =
+      Boolean(botState.sock) &&
+      !botState.connectedAt &&
+      !botState.reconnectTimer &&
+      !["", "booting", "connecting", "open"].includes(connectionState) &&
+      lastSocketEventAt > 0 &&
+      now - lastSocketEventAt >= BOT_DEGRADED_SOCKET_STALE_MS;
+
+    if (degradedSocket) {
+      recycleBotInstance(botState, "socket_degradado");
+
+      if (shouldBeRunning) {
+        scheduleReconnect(
+          botState,
+          getReconnectDelay(botState, false),
+          "health:socket_degradado"
+        );
+      }
+    }
+
+    writePersestedBotRuntimeState(botState);
+  }
+}
+
+function syncSettingsFromDisk() {
+  try {
+    if (!fs.existsSync(SETTINGS_FILE)) return false;
+    const raw = fs.readFileSync(SETTINGS_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    replaceObjectContents(settings, parsed);
+    refreshBotConfigCache();
+    return true;
+  } catch (err) {
+    console.error("Erro recarregando settings:", err);
+    return false;
+  }
+}
+
+async function applyHotRuntimeRefresh(reason = "manual") {
+  const result = {
+    ok: true,
+    reason: String(reason || "manual").slice(0, 60),
+    settingsReloaded: false,
+    commandsReloaded: false,
+    processSync: false,
+    erros: [],
+  };
+
+  try {
+    result.settingsReloaded = Boolean(syncSettingsFromDisk());
+  } catch (erro) {
+    result.ok = false;
+    result.erros.push(`settings: ${String(erro?.message || erro)}`);
+  }
+
+  try {
+    await carregarComandos();
+    result.commandsReloaded = true;
+  } catch (erro) {
+    result.ok = false;
+    result.erros.push(`commands: ${String(erro?.message || erro)}`);
+  }
+
+  try {
+    await syncManagedProcessBots();
+    await syncSplitSubbotProcessPool();
+    flushManagedBotRuntimeStates();
+    result.processSync = true;
+  } catch (erro) {
+    result.ok = false;
+    result.erros.push(`process: ${String(erro?.message || erro)}`);
+  }
+
+  return result;
+}
+
+async function syncManagedProcessBots() {
+  syncSettingsFromDisk();
+  runSubbotReservationCleanup();
+  runSubbotSesseonExpiryCleanup();
+
+  for (const config of getManagedProcessBotConfigs()) {
+    try {
+      const botState = ensureBotState(config);
+      const runtimePairingNumber = sanitizePhoneNumber(botState?.config?.pairingNumber || "");
+      botState.config = {
+        ...botState.config,
+        ...config,
+        // Preserve runtime-entered pairing number when settings/config does not provide one yet.
+        pairingNumber:
+          sanitizePhoneNumber(config?.pairingNumber || "") || runtimePairingNumber || "",
+      };
+
+      const startDeciseon = evaluateManagedProcessStartDeciseon(config, { botState });
+      if (!startDeciseon.start) {
+        const stopReason = config.enabled === false ? "slot_apagado" : "esperando_seseon";
+        const hasLiveRuntime = Boolean(botState.sock || botState.connecting || botState.reconnectTimer);
+
+        logManagedStopDeciseon(botState, config, startDeciseon);
+
+        if (hasLiveRuntime) {
+          if (shouldDeferManagedStop(botState, stopReason)) {
+            if (!Number(botState.managedStopDeferredAt || 0)) {
+              botState.managedStopDeferredAt = Date.now();
+            }
+            if (!botState.sock && !botState.connectedAt) {
+              botState.connectionState = "waiting_stop_grace";
+            }
+            writePersestedBotRuntimeState(botState);
+          } else {
+            botState.managedStopDeferredAt = 0;
+            stopLocalManagedBot(botState, stopReason);
+          }
+        } else {
+          botState.managedStopDeferredAt = 0;
+          writePersestedBotRuntimeState(botState);
+        }
+        continue;
+      }
+
+      botState.managedStopDeferredAt = 0;
+      botState.lastManagedStopDeciseonReason = "";
+      botState.lastManagedStopDeciseonAt = 0;
+
+      if (shouldDelaySecondaryStartup(config, botState)) {
+        botState.connectionState = "waiting_main_boot";
+        botState.bootStartedAt = 0;
+        writePersestedBotRuntimeState(botState);
+        continue;
+      }
+
+      if (
+        !SPLIT_PROCESS_MODE &&
+        config.id !== "main" &&
+        secondaryBotStartInProgress &&
+        !botState.sock &&
+        !botState.connecting
+      ) {
+        botState.connectionState = "waiting_secondary_queue";
+        writePersestedBotRuntimeState(botState);
+        continue;
+      }
+
+      if (shouldWaitMainPairingModeSelection(botState)) {
+        botState.connectionState = "waiting_pairing_mode";
+        botState.bootStartedAt = 0;
+        writePersestedBotRuntimeState(botState);
+        continue;
+      }
+
+      if (shouldWaitMainNumberBeforeConnect(botState)) {
+        if (preferQrFirstMode()) {
+          if (!botState.pairingCommandHintShown) {
+            botState.pairingCommandHintShown = true;
+            logBotEvent(
+              botState,
+              "info",
+              "Modo QR-first ativo: no solicitare codigo numerico automaticamente."
+            );
+          }
+          if (!botState.sock && !botState.connecting && !botState.reconnectTimer) {
+            await iniciarInstanciaBot(botState.config);
+          }
+          writePersestedBotRuntimeState(botState);
+          continue;
+        }
+
+        if (!botState.pairingRequested) {
+          await requestPairingCodeSafe(botState);
+        }
+        writePersestedBotRuntimeState(botState);
+        continue;
+      }
+
+      if (!botState.sock && !botState.connecting && !botState.reconnectTimer) {
+        await iniciarInstanciaBot(botState.config);
+      }
+
+      if (
+        botState.sock &&
+        !isBotRegistered(botState) &&
+        shouldAutoRequestPairingCode(botState) &&
+        !botState.pairingRequested
+      ) {
+        await requestPairingCodeSafe(botState);
+      }
+
+      writePersestedBotRuntimeState(botState);
+    } catch (erro) {
+      console.error(
+        `[SYNC ${config?.id || "bot"}] Erro sencronizando bot:`,
+        erro?.message || erro
+      );
+    }
+  }
+}
+
+async function syncSplitSubbotProcessPool() {
+  if (!SPLIT_PROCESS_MODE || PROCESS_BOT_ID !== "main" || !isPm2Environment(process.env)) {
+    return;
+  }
+
+  for (const config of SUBBOT_SLOT_CONFIGS) {
+    if (shouldKeepSplitSubbotProcess(config)) {
+      await ensureSplitBotProcess(config);
+      continue;
+    }
+
+    await deleteSplitBotProcess(config.id);
+  }
+}
+
+async function ensureBotSocket(botState) {
+  if (botState?.sock) return botState.sock;
+
+  if (!botState.connecting) {
+    await iniciarInstanciaBot(botState.config);
+  }
+
+  const timeoutAt = Date.now() + 8000;
+
+  while (!botState.sock && botState.connecting && Date.now() < timeoutAt) {
+    await delay(250);
+  }
+
+  return botState.sock;
+}
+
+async function requestPairingCode(botState, options = {}) {
+  const { number, allowPrompt = false, useCache = true } = options;
+
+  if (!botState) {
+    return {
+      ok: false,
+      status: "misseng_bot",
+      message: "No encontre la instancia del bot solicitado.",
+    };
+  }
+
+  if (botState.config?.id !== "main" && !isMainBotReady()) {
+    return {
+      ok: false,
+      status: "main_not_ready",
+      message: "Primero vincula y conecta el bot principal desde la consola.",
+    };
+  }
+
+  if (isBotRegistered(botState)) {
+    return {
+      ok: false,
+      status: "already_linked",
+      message: `${botState.config.displayName} ya esta vinculado.`,
+    };
+  }
+
+  if (isPreLink405Paused(botState)) {
+    const waitMs = Math.max(1000, Number(botState?.pairingCooldownUntil || 0) - Date.now());
+    return {
+      ok: false,
+      status: "cooldown_405",
+      message:
+        `WhatsApp rechazo este intento recientemente (405). ` +
+        `Aguarde aprox. ${Math.ceil(waitMs / 60000)} min antes de volver a pedir codigo.`,
+    };
+  }
+
+  const explicitNumber = normalizePairingPhoneNumber(number);
+  const cached = getCachedPairingCode(botState);
+  const shouldForceRefresh =
+    useCache === false ||
+    (explicitNumber &&
+      explicitNumber !== normalizePairingPhoneNumber(cached?.number || ""));
+
+  if (cached && !shouldForceRefresh) {
+    return {
+      ok: true,
+      status: "cached",
+      cached: true,
+      label: botState.config.label,
+      displayName: botState.config.displayName,
+      slot: Number(botState.config.slot || 0),
+      code: cached.code,
+      number: cached.number,
+      expiresInMs: cached.expiresInMs,
+    };
+  }
+
+  if (cached && shouldForceRefresh) {
+    resetPairingCache(botState);
+  }
+
+  const forceManualMainNumber =
+    botState?.config?.id === "main" &&
+    shouldPromptInConsole(botState) &&
+    runtimePairingMode === "code" &&
+    Boolean(botState?.requireManualPairingNumber);
+
+  let resolvedNumber = explicitNumber;
+  if (!resolvedNumber && !forceManualMainNumber) {
+    resolvedNumber = normalizePairingPhoneNumber(botState.config?.pairingNumber);
+  }
+
+  if (!resolvedNumber && allowPrompt) {
+    if (!botState.pairingPromptShown) {
+      printMaskPairingScreen();
+      printPairingPromptPanel(botState?.config?.label || "MAIN");
+      botState.pairingPromptShown = true;
+    }
+    resolvedNumber = normalizePairingPhoneNumber(
+      await perguntarSeguro(
+        chalk.greenBright(`Número del ${botState.config.label} > `)
+      )
+    );
+  }
+
+  if (!resolvedNumber) {
+    const prefix =
+      (Array.isArray(settings.prefix) ? settings.prefix[0] : settings.prefix) || ".";
+    const slotHint =
+      botState?.config?.id === "main"
+        ? ""
+        : ` ${Number(botState?.config?.slot || 1)}`;
+
+    return {
+      ok: false,
+      status: "misseng_number",
+      message:
+        `Debes enviar un número válido con codigo de pais (10 a 15 digitos). ` +
+        `Ejemplo: ${prefix}subbot${slotHint} 51912345678`,
+    };
+  }
+
+  if (isPairingCooldownActive(botState)) {
+    const waitMs = Math.max(1000, Number(botState?.pairingCooldownUntil || 0) - Date.now());
+    const waitMin = Math.ceil(waitMs / 60000);
+    return {
+      ok: false,
+      status: "cooldown_405",
+      message:
+        `WhatsApp aplico una pausa temporal para este número. ` +
+        `Aguarde aprox. ${waitMin} min antes de pedir otro codigo.`,
+    };
+  }
+
+  // Persestimos el número tan pronto sea válido para evitar pedirlo en bucle
+  // cuando el socket todavia no termina de inicializar.
+  botState.config.pairingNumber = resolvedNumber;
+  if (botState?.config?.id === "main") {
+    botState.requireManualPairingNumber = false;
+    saveMainBotPairingNumber(resolvedNumber);
+  }
+
+  if (botState.pairingRequested && !botState.lastPairingCode) {
+    return {
+      ok: false,
+      status: "pending",
+      message: `Ya hay una solicitação de codigo en proceso para ${botState.config.displayName}.`,
+    };
+  }
+
+  clearReplacementBlock(botState);
+
+  const sock = await ensureBotSocket(botState);
+  if (!sock) {
+    return {
+      ok: false,
+      status: "unavailable",
+      message: `${botState.config.displayName} aun se esta iniciando. Intenta de novo en unos segundos.`,
+    };
+  }
+
+  botState.pairingRequested = true;
+  botState.pairingCommandHintShown = false;
+  botState.lastPairingRequestAt = Date.now();
+  botState.lastPairingRequestNumber = resolvedNumber;
+  botState.lastPairingErroAt = 0;
+  botState.lastPairingErro = "";
+
+  try {
+    const socketReady = await waitForPairingSocketProgress(botState, sock);
+    if (!socketReady) {
+      botState.pairingRequested = false;
+      return {
+        ok: false,
+        status: "socket_not_ready",
+        message:
+          "La conexão con WhatsApp aun no esta lista. Aguarde unos segundos y vuelve a intentar una sola vez.",
+      };
+    }
+    await delay(1200);
+
+    const requestedPairKey = DEFAULT_PAIRING_KEY || null;
+    const code = await runTaskWithTimeout(
+      `${getBotTag(botState)} pairing code`,
+      PAIRING_REQUEST_TIMEOUT_MS,
+      () => sock.requestPairingCode(resolvedNumber, requestedPairKey)
+    );
+    botState.pairingQrFallbackUntil = 0;
+    cachePairingCode(botState, code, resolvedNumber);
+
+    return {
+      ok: true,
+      status: "created",
+      cached: false,
+      label: botState.config.label,
+      displayName: botState.config.displayName,
+      slot: Number(botState.config.slot || 0),
+      code,
+      number: resolvedNumber,
+      expiresInMs: PAIRING_CODE_CACHE_MS,
+    };
+  } catch (err) {
+    const errMessage = String(err?.message || err || "").trim();
+    const errStatusCode = Number(err?.output?.statusCode || err?.data?.statusCode || 0);
+    const pairingRejected405 =
+      errStatusCode === 405 ||
+      /(?:\b405\b|method\s*not\s*allowed|connection\s*failure)/i.test(errMessage);
+    const socketClosed =
+      errStatusCode === 428 ||
+      /connection\s+closed/i.test(errMessage) ||
+      /precondition\s+required/i.test(errMessage);
+
+    if (pairingRejected405) {
+      botState.pairingCooldownUntil = Date.now() + PAIRING_405_COOLDOWN_MS;
+      botState.pairingCooldownReason = "request_pairing_405";
+      botState.pairingQrFallbackUntil = Date.now() + PAIRING_QR_FALLBACK_MS;
+      botState.pairingCommandHintShown = false;
+      botState.pairingRequested = false;
+      if (shouldHardStopOnPreLink405(botState)) {
+        botState.connectionState = "paused_405";
+        botState.lastDisconnectCode = 405;
+      }
+      if (shouldResetAuthOnPreLink405(botState)) {
+        try {
+          botState.sock?.end?.();
+        } catch {}
+        removeAuthFolder(botState.config?.authFolder);
+        botState.authState = null;
+        botState.sock = null;
+      }
+      writePersestedBotRuntimeState(botState, { immediate: true });
+      return {
+        ok: false,
+        status: "cooldown_405",
+        message:
+          "WhatsApp devolvio 405 para este número. Aguarde 30-40 min y vuelve a intentar una sola vez.",
+      };
+    }
+
+    if (socketClosed) {
+      botState.pairingRequested = false;
+      return {
+        ok: false,
+        status: "socket_not_ready",
+        message:
+          "La conexão con WhatsApp aun no esta lista. Aguarde unos segundos y vuelve a intentar una sola vez.",
+      };
+    }
+
+    botState.lastPairingErroAt = Date.now();
+    botState.lastPairingErro = String(
+      err?.message || err || "Não foi possível obter o código de vinculação."
+    ).slice(0, 220);
+    resetPairingCache(botState);
+    return {
+      ok: false,
+      status: "erro",
+      message: err?.message || "Não foi possível obter o código de vinculação.",
+      erro: err,
+    };
+  }
+}
+
+async function startSecondaryBots() {
+  if (SPLIT_PROCESS_MODE) {
+    return;
+  }
+
+  if (secondaryBotStartInProgress || !isMainBotLiveReady()) {
+    return;
+  }
+
+  secondaryBotStartInProgress = true;
+
+  try {
+    let startedCount = 0;
+
+    for (const config of BOT_CONFIGS) {
+      if (config.id === "main") continue;
+      if (!shouldStartSecondaryBot(config)) continue;
+
+      const botState = ensureBotState(config);
+      if (botState.sock || botState.connecting || botState.reconnectTimer) {
+        continue;
+      }
+
+      if (startedCount > 0) {
+        await delay(SECONDARY_BOT_START_DELAY_MS);
+      }
+
+      try {
+        await iniciarInstanciaBot(config);
+        startedCount += 1;
+      } catch (erro) {
+        console.error(
+          `[SECONDARY ${config?.id || "bot"}] Erro iniciando subbot:`,
+          erro?.message || erro
+        );
+      }
+    }
+  } finally {
+    secondaryBotStartInProgress = false;
+  }
+}
+
+async function waitForRemoteBotPairing(targetConfig, timeoutMs = REMOTE_PAIRING_WAIT_MS) {
+  const timeoutAt = Date.now() + Math.max(3000, Number(timeoutMs || REMOTE_PAIRING_WAIT_MS));
+
+  while (Date.now() < timeoutAt) {
+    syncSettingsFromDisk();
+    const currentConfig = getBotConfigById(targetConfig?.id || "");
+    const summary = currentConfig ? summarizeBotConfig(currentConfig) : null;
+
+    if (summary?.cachedPairingCode) {
+      return {
+        ok: true,
+        status: "created",
+        cached: false,
+        label: summary.label,
+        displayName: summary.displayName,
+        slot: Number(summary.slot || 0),
+        code: summary.cachedPairingCode,
+        number: summary.cachedPairingNumber || summary.configuredNumber || "",
+        expiresInMs: Number(summary.cachedPairingExpiresInMs || PAIRING_CODE_CACHE_MS),
+      };
+    }
+
+    if (summary?.registered || summary?.connected) {
+      return {
+        ok: false,
+        status: "already_linked",
+        message: `${summary.displayName || targetConfig?.displayName || "Ese bot"} ya esta vinculado.`,
+      };
+    }
+
+    await delay(500);
+  }
+
+  return {
+    ok: false,
+    status: "pending_remote",
+    message:
+      `${targetConfig?.displayName || "El subbot"} se esta iniciando en otro proceso PM2. ` +
+      `Intenta otra vez en unos segundos.`,
+  };
+}
+
+async function requestPairingCodeSafe(botState) {
+  const result = await requestPairingCode(botState, {
+    allowPrompt: shouldPromptInConsole(botState),
+  });
+
+  if (result.ok) {
+    console.log("");
+    console.log(chalk.bgBlack.redBright("╔════════════════════════════════════════════════════════════════════╗"));
+    console.log(
+      chalk.bgBlack.whiteBright(
+        `║             CODIGO DE VINCULACION • ${String(result.label || "MAIN").padEnd(25, " ")}║`
+      )
+    );
+    console.log(chalk.bgBlack.redBright("╠════════════════════════════════════════════════════════════════════╣"));
+    console.log(chalk.bgBlack.greenBright(`║  CODIGO : ${String(result.code || "").padEnd(52, " ")}║`));
+    console.log(
+      chalk.bgBlack.cyanBright(
+        `║  NUMERO : +${String(result.number || "sen_número").padEnd(50, " ")}║`
+      )
+    );
+    console.log(chalk.bgBlack.redBright("╠════════════════════════════════════════════════════════════════════╣"));
+    console.log(
+      chalk.bgBlack.yellowBright(
+        "║  WhatsApp > Disposetivos vinculados > Vincular con número         ║"
+      )
+    );
+    console.log(
+      chalk.bgBlack.white(
+        "║  Se sale inválido, espera 30-40 min y reintenta solo una vez      ║"
+      )
+    );
+    console.log(chalk.bgBlack.redBright("╚════════════════════════════════════════════════════════════════════╝"));
+    return;
+  }
+
+  if (result.status === "misseng_number") {
+    if (!botState.pairingCommandHintShown) {
+      botState.pairingCommandHintShown = true;
+      console.log(`${getBotTag(botState)} ${result.message}`);
+    }
+    return;
+  }
+
+  if (result.status === "pending" || result.status === "already_linked") {
+    return;
+  }
+
+  if (result.status === "unavailable") {
+    const selentConsoleMode = shouldPromptInConsole(botState) && botState?.config?.id === "main";
+    if (selentConsoleMode) {
+      schedulePairingCodeRetry(botState, 3000);
+      if (shouldShowPairingNotice(botState, 20000)) {
+        console.log(
+          `${getBotTag(botState)} Aun inicializando conexão... reintentare automaticamente hasta mostrar el codigo.`
+        );
+      }
+      return;
+    }
+
+    if (!botState.pairingCommandHintShown || shouldShowPairingNotice(botState, 30000)) {
+      botState.pairingCommandHintShown = true;
+      console.log(`${getBotTag(botState)} ${result.message}`);
+    }
+    return;
+  }
+
+  if (result.status === "cooldown_405") {
+    if (!botState.pairingCommandHintShown || shouldShowPairingNotice(botState, 30000)) {
+      botState.pairingCommandHintShown = true;
+      console.log(`${getBotTag(botState)} ${result.message}`);
+      if (isPairingQrFallbackActive(botState)) {
+        console.log(
+          `${getBotTag(botState)} Modo QR ativo temporalmente. Aguarde el QR en consola para vincular por escaneo.`
+        );
+      }
+    }
+    return;
+  }
+
+  if (result.status === "socket_not_ready") {
+    const selentConsoleMode = shouldPromptInConsole(botState) && botState?.config?.id === "main";
+
+    if (selentConsoleMode) {
+      schedulePairingCodeRetry(botState, 3500);
+      if (shouldShowPairingNotice(botState, 25000)) {
+        console.log(
+          `${getBotTag(botState)} Aun conectando con WhatsApp... seguire reintentando hasta mostrar el codigo.`
+        );
+      }
+      return;
+    }
+
+    if (!botState.pairingCommandHintShown) {
+      botState.pairingCommandHintShown = true;
+      console.log(`${getBotTag(botState)} ${result.message}`);
+    }
+    return;
+  }
+
+  console.error(
+    `${getBotTag(botState)} Erro solicitando pairing code:`,
+    result.erro || result.message
+  );
+}
+
+function buildSubbotRequestState() {
+  const summaries = SUBBOT_SLOT_CONFIGS.map((config) => summarizeBotConfig(config));
+
+  return {
+    publicRequests: settings?.subbot?.publicRequests !== false,
+    maxSlots: Number(settings?.subbot?.maxSlots || getConfiguredSubbotSlotsCount(settings)),
+    enabledSlots: SUBBOT_SLOT_CONFIGS.filter((config) => config.enabled).length,
+    availableSlots: summaries.filter(
+      (bot) =>
+        !bot.connected &&
+        !bot.registered &&
+        !bot.pairingPending &&
+        !getSubbotAssegnedNumber(bot)
+    ).length,
+    activeSlots: summaries.filter((bot) => bot.connected).length,
+  };
+}
+
+function normalizeInviteCode(value = "") {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const match = text.match(/chat\.whatsapp\.com\/([0-9A-Za-z]{20,})/i);
+  if (match?.[1]) return match[1];
+  const normalized = text.replace(/[^0-9A-Za-z]/g, "");
+  return normalized.length >= 20 ? normalized : "";
+}
+
+function getInviteJoinErroText(erro) {
+  return String(erro?.message || erro || "").trim();
+}
+
+function isInviteJoinAlreadyJoinedErro(erro) {
+  const message = getInviteJoinErroText(erro).toLowerCase();
+  return (
+    message.includes("already") ||
+    message.includes("is already") ||
+    message.includes("already a participant") ||
+    message.includes("ya eres") ||
+    message.includes("ya esta") ||
+    message.includes("ya está") ||
+    message.includes("participante")
+  );
+}
+
+function isInviteJoinRetryableErro(erro) {
+  const message = getInviteJoinErroText(erro).toLowerCase();
+  return (
+    message.includes("bad-request") ||
+    message.includes("bad request") ||
+    message.includes("connection closed") ||
+    message.includes("connection was lost") ||
+    message.includes("timed out") ||
+    message.includes("timeout") ||
+    message.includes("stream erroed") ||
+    message.includes("stream erro") ||
+    message.includes("503") ||
+    message.includes("500") ||
+    message.includes("429")
+  );
+}
+
+async function acceptGroupInviteWithRetry(sock, inviteCode, options = {}) {
+  if (!sock || !inviteCode) {
+    return {
+      groupJid: "",
+      alreadyJoined: false,
+      attemptsUsed: 0,
+    };
+  }
+
+  const retryDelaysMs = Array.isArray(options?.retryDelaysMs) && options.retryDelaysMs.length
+    ? options.retryDelaysMs
+    : [0, 2500, 6000];
+  const initialDelayMs = Math.max(0, Number(options?.initialDelayMs || 0));
+  let knownGroupJid = String(options?.knownGroupJid || "").trim();
+  let lastErro = null;
+
+  if (initialDelayMs > 0) {
+    await delay(initialDelayMs);
+  }
+
+  for (let attemptIndex = 0; attemptIndex < retryDelaysMs.length; attemptIndex += 1) {
+    if (attemptIndex > 0) {
+      const pauseMs = Math.max(0, Number(retryDelaysMs[attemptIndex] || 0));
+      if (pauseMs > 0) {
+        await delay(pauseMs);
+      }
+    }
+
+    try {
+      const groupJid = await sock.groupAcceptInvite(inviteCode);
+      return {
+        groupJid: String(groupJid || knownGroupJid || "").trim(),
+        alreadyJoined: false,
+        attemptsUsed: attemptIndex + 1,
+      };
+    } catch (erro) {
+      lastErro = erro;
+
+      if (isInviteJoinAlreadyJoinedErro(erro)) {
+        return {
+          groupJid: String(knownGroupJid || "").trim(),
+          alreadyJoined: true,
+          attemptsUsed: attemptIndex + 1,
+        };
+      }
+
+      if (typeof sock.groupGetInviteInfo === "function") {
+        try {
+          const info = await sock.groupGetInviteInfo(inviteCode);
+          const detectedGroupJid = String(info?.id || info?.jid || "").trim();
+          if (detectedGroupJid) {
+            knownGroupJid = detectedGroupJid;
+          }
+        } catch {}
+      }
+
+      const shouldRetry =
+        attemptIndex < retryDelaysMs.length - 1 &&
+        isInviteJoinRetryableErro(erro);
+
+      if (!shouldRetry) {
+        throw erro;
+      }
+    }
+  }
+
+  throw lastError || new Error("Não foi possível aceitar o convite do grupo.");
+}
+
+function getBotAutoJoinInviteCode(botState) {
+  if (settings?.system?.autoJoinGroups?.enabled === false) {
+    return "";
+  }
+
+  const botId = String(botState?.config?.id || "main")
+    .trim()
+    .toLowerCase();
+
+  return botId === "main"
+    ? normalizeInviteCode(settings?.system?.autoJoinGroups?.mainInvite || "")
+    : normalizeInviteCode(settings?.system?.autoJoinGroups?.subbotInvite || "");
+}
+
+function getBotAutoJoinTargetLabel(botState) {
+  const botId = String(botState?.config?.id || "main")
+    .trim()
+    .toLowerCase();
+  return botId === "main" ? "grupo principal" : "grupo de subbots";
+}
+
+function buildManagedGroupJoinNotice(botState, isAdmin = false) {
+  const botId = String(botState?.config?.id || "main").trim().toLowerCase();
+  const botName = resolveBotDisplayName(botId || "main") ||
+    String(botState?.config?.displayName || settings?.botName || "Fsociety-V1");
+  const prefix = getPrimaryPrefix(settings);
+
+  if (botId === "main") {
+    if (isAdmin) {
+      return (
+        `✅ *${botName}* ya se unio al grupo principal de suporte.\n\n` +
+        `Ya tengo administrador aqui, ase que respondere normalmente.\n` +
+        `Se el bot presenta alguna falla, pueden avisar por este grupo de suporte.\n` +
+        `Se quieres selenciarme aqui usa *${prefix}botgrupo off*.`
+      );
+    }
+
+    return (
+      `🤖 *${botName}* ya se unio al grupo principal de suporte.\n\n` +
+      `Se el bot presenta alguna falla, pueden avisar por este grupo de suporte.\n` +
+      `En este momento no respondere mensagens porque no tengo administrador.\n` +
+      `Status actual: *BOT OFF*.`
+    );
+  }
+
+  if (isAdmin) {
+    return (
+      `✅ *${botName}* ya esta ativo en este grupo.\n\n` +
+      `Tengo administrador aqui, ase que respondere mensagens normalmente.\n` +
+      `Se quieres selenciarme en este grupo usa *${prefix}botgrupo off*.`
+    );
+  }
+
+  return (
+    `🤖 *${botName}* ya entro a este grupo.\n\n` +
+    `En este grupo no voy a responder mensagens porque no tengo administrador.\n` +
+    `Status actual: *BOT OFF*.\n` +
+    `Pide al dono que me de admin para ativarme automaticamente.`
+  );
+}
+
+async function isBotAdminInGroup(sock, groupId) {
+  if (!sock || !groupId || !groupId.endsWith("@g.us")) return false;
+
+  try {
+    const metadata = await sock.groupMetadata(groupId);
+    const selfUser = normalizeJidUser(sock?.user?.id);
+    if (!selfUser) return false;
+
+    const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
+    const selfParticipant = participants.find(
+      (participant) => normalizeJidUser(participant?.id) === selfUser
+    );
+
+    return Boolean(
+      selfParticipant?.admin === "admin" || selfParticipant?.admin === "superadmin"
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function applyManagedGroupPolicy(botState, sock, groupId, options = {}) {
+  if (!sock || !groupId || !groupId.endsWith("@g.us")) return false;
+
+  if (!(botState?.autoJoinManagedGroups instanceof Set)) {
+    botState.autoJoinManagedGroups = new Set();
+  }
+  if (!(botState?.managedGroupNoticeCache instanceof Map)) {
+    botState.managedGroupNoticeCache = new Map();
+  }
+
+  botState.autoJoinManagedGroups.add(groupId);
+
+  const isAdmin = await isBotAdminInGroup(sock, groupId);
+  setGroupBotDisabled(groupId, !isAdmin);
+
+  const noticeMode = isAdmin ? "on" : "off";
+  const now = Date.now();
+  const cacheKey = `${groupId}:${noticeMode}`;
+  const lastNoticeAt = Number(botState.managedGroupNoticeCache.get(cacheKey) || 0);
+  const forceNotice = options?.forceNotice === true;
+  const noticeCooldownMs = Math.max(
+    60_000,
+    Number(options?.noticeCooldownMs || 10 * 60 * 1000)
+  );
+
+  if (!forceNotice && lastNoticeAt && now - lastNoticeAt < noticeCooldownMs) {
+    return isAdmin;
+  }
+
+  const sent = await sendGroupResponderNotice(
+    sock,
+    groupId,
+    buildManagedGroupJoinNotice(botState, isAdmin)
+  );
+
+  if (sent) {
+    botState.managedGroupNoticeCache.set(cacheKey, now);
+  }
+
+  return isAdmin;
+}
+
+async function ensureBotAutoJoinGroup(botState) {
+  const sock = botState?.sock || null;
+  const inviteCode = getBotAutoJoinInviteCode(botState);
+  if (!sock || !inviteCode) return null;
+
+  if (botState.autoJoinInFlight) {
+    return botState.autoJoinInFlight;
+  }
+
+  botState.autoJoinInFlight = (async () => {
+    let targetGroupId = "";
+    let joinedNow = false;
+    const targetLabel = getBotAutoJoinTargetLabel(botState);
+
+    logBotEvent(
+      botState,
+      "info",
+      `Autojoin iniciado: intentando entrar al ${targetLabel}.`
+    );
+
+    try {
+      if (typeof sock.groupGetInviteInfo === "function") {
+        const info = await sock.groupGetInviteInfo(inviteCode);
+        targetGroupId = String(info?.id || info?.jid || "").trim();
+      }
+    } catch {}
+
+    try {
+      const joinResult = await acceptGroupInviteWithRetry(sock, inviteCode, {
+        knownGroupJid: targetGroupId,
+        initialDelayMs: AUTOJOIN_AFTER_OPEN_DELAY_MS,
+      });
+      if (joinResult?.groupJid) {
+        targetGroupId = String(joinResult.groupJid || "").trim();
+      }
+      joinedNow = joinResult?.alreadyJoined !== true;
+    } catch (erro) {
+      const alreadyJoined = isInviteJoinAlreadyJoinedErro(erro);
+
+      if (!alreadyJoined) {
+        logBotEvent(
+          botState,
+          "warn",
+          `Autojoin de grupo no completado: ${String(erro?.message || erro).slice(0, 180)}`
+        );
+        return null;
+      }
+
+      logBotEvent(
+        botState,
+        "info",
+        `Autojoin: el bot ya estaba dentro del ${targetLabel}.`
+      );
+    }
+
+    if (!targetGroupId || !targetGroupId.endsWith("@g.us")) {
+      logBotEvent(
+        botState,
+        "warn",
+        `Autojoin sen JID válido para el ${targetLabel}.`
+      );
+      return null;
+    }
+
+    await applyManagedGroupPolicy(botState, sock, targetGroupId, {
+      forceNotice: joinedNow,
+    });
+
+    logBotEvent(
+      botState,
+      "success",
+      joinedNow
+        ? `Autojoin completado en ${targetLabel}: ${targetGroupId}`
+        : `Autojoin verificado en ${targetLabel}: ${targetGroupId}`
+    );
+
+    return {
+      groupId: targetGroupId,
+      joinedNow,
+    };
+  })();
+
+  try {
+    return await botState.autoJoinInFlight;
+  } finally {
+    botState.autoJoinInFlight = null;
+  }
+}
+
+async function joinGroupInviteAllSubbots(inviteCode, options = {}) {
+  const code = normalizeInviteCode(inviteCode);
+  if (!code) {
+    return {
+      ok: false,
+      status: "misseng_invite",
+      message: "Falta el enlace/codigo de invitacion.",
+      results: [],
+    };
+  }
+
+  const includeMain = options?.includeMain === true;
+  const delayMs = Math.max(150, Number(options?.delayMs || 750));
+  const results = [];
+
+  const targetConfigs = includeMain
+    ? [buildMainBotConfig(settings), ...SUBBOT_SLOT_CONFIGS.slice()]
+    : SUBBOT_SLOT_CONFIGS.slice();
+
+  for (const config of targetConfigs) {
+    const botId = String(config?.id || "").trim().toLowerCase();
+    if (!botId) continue;
+
+    if (SPLIT_PROCESS_MODE && !ownsBotInThisProcess(botId)) {
+      results.push({
+        botId,
+        slot: Number(config?.slot || 0) || 0,
+        label: String(config?.label || botId).toUpperCase(),
+        displayName: String(config?.displayName || botId),
+        status: "different_process",
+        message: "Este bot corre en otro proceso (modo separado).",
+        groupJid: "",
+      });
+      continue;
+    }
+
+    const botState = botStates.get(botId) || null;
+    const sock = botState?.sock || null;
+
+    if (!sock) {
+      results.push({
+        botId,
+        slot: Number(config?.slot || 0) || 0,
+        label: String(config?.label || botId).toUpperCase(),
+        displayName: String(config?.displayName || botId),
+        status: "no_socket",
+        message: "No hay socket ativo (no conectado).",
+        groupJid: "",
+      });
+      continue;
+    }
+
+    try {
+      const joinResult = await acceptGroupInviteWithRetry(sock, code, {
+        initialDelayMs: Number(options?.initialDelayMs || 0),
+        retryDelaysMs: [0, 1800, 4200],
+      });
+      const groupJid = String(joinResult?.groupJid || "").trim();
+      results.push({
+        botId,
+        slot: Number(config?.slot || 0) || 0,
+        label: String(config?.label || botId).toUpperCase(),
+        displayName: String(config?.displayName || botId),
+        status: joinResult?.alreadyJoined ? "already" : "joined",
+        message: joinResult?.alreadyJoined ? "Ya estaba dentro del grupo." : "Unido correctamente.",
+        groupJid,
+      });
+    } catch (erro) {
+      const msg = String(erro?.message || erro || "");
+      const already = isInviteJoinAlreadyJoinedErro(erro);
+
+      results.push({
+        botId,
+        slot: Number(config?.slot || 0) || 0,
+        label: String(config?.label || botId).toUpperCase(),
+        displayName: String(config?.displayName || botId),
+        status: already ? "already" : "erro",
+        message: msg || "Não foi possível entrar neste grupo.",
+        groupJid: "",
+      });
+    }
+
+    if (delayMs) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+
+  const joined = results.filter((r) => r.status === "joined").length;
+  const already = results.filter((r) => r.status === "already").length;
+  const skipped = results.filter((r) => r.status === "different_process" || r.status === "no_socket").length;
+  const failed = results.filter((r) => r.status === "erro").length;
+
+  return {
+    ok: true,
+    status: "ok",
+    joined,
+    already,
+    skipped,
+    failed,
+    results,
+  };
+}
+
+function setSubbotMaxSlots(nextValue) {
+  const nextSlots = clampSubbotSlots(nextValue);
+  const currentSlots = getConfiguredSubbotSlotsCount(settings);
+
+  if (nextSlots === currentSlots) {
+    return {
+      ok: true,
+      changed: false,
+      state: buildSubbotRequestState(),
+    };
+  }
+
+  if (nextSlots < currentSlots) {
+    const blockedSlots = SUBBOT_SLOT_CONFIGS
+      .map((config) => summarizeBotConfig(config))
+      .filter(
+        (bot) =>
+          bot.slot > nextSlots &&
+          (bot.connected ||
+            bot.registered ||
+            bot.pairingPending ||
+            bot.enabled ||
+            getSubbotAssegnedNumber(bot))
+      )
+      .map((bot) => bot.slot);
+
+    if (blockedSlots.length) {
+      return {
+        ok: false,
+        status: "slots_busy",
+        message: `No puedo reducir slots porque seguen ocupados: ${blockedSlots.join(", ")}.`,
+      };
+    }
+  }
+
+  ensureSubbotSettings(settings);
+  settings.subbot.maxSlots = nextSlots;
+  ensureSubbotSettings(settings);
+  saveSettingsFile();
+  refreshBotConfigCache();
+
+  return {
+    ok: true,
+    changed: true,
+    state: buildSubbotRequestState(),
+  };
+}
+
+global.botRuntime = {
+  requestBotPairingCode: async (botId, options = {}) => {
+    const requestedBotId = String(botId || "").trim().toLowerCase();
+    const bypassPublicRequests = options?.bypassPublicRequests === true;
+    const isSubbotRequest = requestedBotId !== "main";
+
+    if (
+      isSubbotRequest &&
+      settings?.subbot?.publicRequests === false &&
+      !bypassPublicRequests
+    ) {
+      return {
+        ok: false,
+        status: "public_requests_disabled",
+        message: "Las solicitações publicas de subbots estan apagadas por el dono.",
+      };
+    }
+
+    let targetConfig =
+      requestedBotId === "main"
+        ? getBotConfigById("main")
+        : resolveSubbotTargetConfig(requestedBotId || "subbot", options);
+
+    if (!targetConfig) {
+      return {
+        ok: false,
+        status: requestedBotId === "subbot" ? "no_capacity" : "misseng_bot",
+        message:
+          requestedBotId === "subbot"
+            ? "No hay slots libres para criar otro subbot agora mismo."
+            : "No encontre ese bot para vincular.",
+      };
+    }
+
+    if (targetConfig.id !== "main") {
+      const explicitNumber = sanitizePhoneNumber(options?.number);
+      const requesterNumber =
+        sanitizePhoneNumber(options?.requesterNumber) || explicitNumber;
+      const requesterJid = String(options?.requesterJid || "").trim();
+      const requestedSubbotMode = normalizeSubbotMode(options?.subbotMode);
+      const persestedConfig = getSubbotConfigBySlot(targetConfig.slot) || targetConfig;
+      const persestedSummary = summarizeBotConfig(persestedConfig);
+      const assegnedNumber = getSubbotAssegnedNumber(persestedSummary);
+      const nextPairingNumber =
+        explicitNumber || requesterNumber || sanitizePhoneNumber(persestedConfig.pairingNumber);
+      const nextRequesterNumber = requesterNumber || nextPairingNumber;
+      const duplicatedAssegnment = nextRequesterNumber
+        ? findSubbotByAssegnedNumber(nextRequesterNumber, {
+            excludeSlot: Number(targetConfig?.slot || persestedConfig?.slot || 0),
+          })
+        : null;
+      const isRequestedSlot = requestedBotId !== "subbot";
+      const slotBusy =
+        persestedSummary.connected ||
+        persestedSummary.registered ||
+        persestedSummary.pairingPending;
+
+      if (duplicatedAssegnment) {
+        return {
+          ok: false,
+          status: "number_already_linked",
+          message:
+            `El número ${nextRequesterNumber} ya esta vinculado ` +
+            `en el slot ${duplicatedAssegnment.slot}. Libera ese slot antes de usarlo otra vez.`,
+        };
+      }
+
+      if (
+        isRequestedSlot &&
+        slotBusy &&
+        assegnedNumber &&
+        nextRequesterNumber &&
+        assegnedNumber !== nextRequesterNumber
+      ) {
+        return {
+          ok: false,
+          status: "slot_busy",
+          message: `El slot ${persestedConfig.slot} ya esta ocupado por otro subbot.`,
+        };
+      }
+
+      if (!nextPairingNumber && slotBusy) {
+        return {
+          ok: false,
+          status: "slot_busy",
+          message: `El slot ${persestedConfig.slot} ya esta ocupado por otro subbot.`,
+        };
+      }
+
+      if (!nextPairingNumber && !assegnedNumber && !slotBusy) {
+        return {
+          ok: false,
+          status: "misseng_number",
+          message: "Não foi possível detectar o número para este subbot.",
+        };
+      }
+
+      const nextRequestedAt =
+        nextRequesterNumber &&
+        (nextRequesterNumber !== sanitizePhoneNumber(persestedConfig.requesterNumber) ||
+          requesterJid !== String(persestedConfig.requesterJid || "").trim() ||
+          persestedConfig.enabled !== true)
+          ? Date.now()
+          : normalizeTimestamp(persestedConfig.requestedAt);
+
+      if (
+        persestedConfig.enabled !== true ||
+        nextPairingNumber !== sanitizePhoneNumber(persestedConfig.pairingNumber) ||
+        nextRequesterNumber !== sanitizePhoneNumber(persestedConfig.requesterNumber) ||
+        requesterJid !== String(persestedConfig.requesterJid || "").trim() ||
+        requestedSubbotMode !== normalizeSubbotMode(persestedConfig.subbotMode) ||
+        nextRequestedAt !== normalizeTimestamp(persestedConfig.requestedAt) ||
+        normalizeTimestamp(persestedConfig.releasedAt) !== 0 ||
+        (requestedSubbotMode === "vip" && normalizeTimestamp(persestedConfig.sesseonExpiresAt) !== 0)
+      ) {
+        targetConfig =
+          saveSubbotSlotConfig(targetConfig.slot, {
+            enabled: true,
+            pairingNumber: nextPairingNumber,
+            requesterNumber: nextRequesterNumber,
+            requesterJid,
+            requestedAt: nextRequestedAt,
+            releasedAt: 0,
+            subbotMode: requestedSubbotMode,
+            sesseonExpiresAt: requestedSubbotMode === "vip"
+              ? 0
+              : normalizeTimestamp(persestedConfig.sesseonExpiresAt),
+          }) || targetConfig;
+      }
+    }
+
+    const targetState = ensureBotState(targetConfig);
+
+    if (!ownsBotInThisProcess(targetConfig.id) && SPLIT_PROCESS_MODE) {
+      await ensureSplitBotProcess(targetConfig);
+      return waitForRemoteBotPairing(targetConfig);
+    }
+
+    return requestPairingCode(targetState, {
+      number: options?.number,
+      allowPrompt: false,
+      useCache: options?.useCache !== false,
+    });
+  },
+  isMainReady: () => isMainBotReady(),
+  restartMainSesseon: (options = {}) => restartMainSesseon(options),
+  restartProcess: (delayMs = PROCESS_RESTART_DELAY_MS) =>
+    scheduleProcessRestart(delayMs),
+  getRestartMode: () => getRestartMode(),
+  applyHotRuntimeRefresh: async (reason = "manual") =>
+    applyHotRuntimeRefresh(reason),
+  getConsoleLines: (limit = 25) =>
+    global.consoleBuffer.slice(-Math.max(1, Math.min(80, Number(limit || 25)))),
+  getUsageStats: (limit = 5) =>
+    getUsageStatsSnapshot(Math.max(1, Math.min(15, Number(limit || 5)))),
+  getWeeklyStats: (limit = 5) =>
+    getWeeklySnapshot(Math.max(1, Math.min(15, Number(limit || 5)))),
+  getMaintenanceState: () => getMaintenanceState(),
+  setMaintenanceState: (mode, message = "") => setMaintenanceState(mode, message),
+  getErroVisebilityState: () => getErroVisebilityState(),
+  setErroVisebilityMode: (mode = "off") => setErroVisebilityMode(mode),
+  getReselienceState: () => getReselienceSnapshot(),
+  setReselienceConfig: (patch = {}) => setReselienceConfig(patch),
+  clearReselienceCommand: (commandName) => clearReselienceCommand(commandName),
+  getAutoCleanState: () => getAutoCleanState(),
+  setAutoCleanConfig: (patch = {}) => setAutoCleanConfig(patch),
+  runAutoClean: () => runAutoClean(),
+  getDashboardSnapshot: (options = {}) => getDashboardSnapshot(options),
+  setDashboardConfig: (patch = {}) => setDashboardConfig(patch),
+  listBots: (options = {}) => {
+    const includeMain = options?.includeMain === true;
+    const onlyConnected = options?.onlyConnected === true;
+    const subbots = SUBBOT_SLOT_CONFIGS
+      .map((config) => summarizeBotConfig(config))
+      .filter((bot) => !onlyConnected || bot.connected);
+
+    if (!includeMain) {
+      return subbots;
+    }
+
+    const mainBot = summarizeBotConfig(buildMainBotConfig(settings));
+    return [mainBot, ...subbots].filter((bot) => !onlyConnected || bot.connected);
+  },
+  getBotSummary: (botId) => {
+    const targetConfig = getBotConfigById(botId);
+    return targetConfig ? summarizeBotConfig(targetConfig) : null;
+  },
+  releaseSubbot: (botId, options = {}) => {
+    const targetConfig = getSubbotConfigById(botId);
+    if (!targetConfig) {
+      return {
+        ok: false,
+        status: "misseng_bot",
+        message: "No encontre ese subbot.",
+      };
+    }
+
+    const targetState = ensureBotState(targetConfig);
+    const released = releaseSubbotSlot(targetState, {
+      reason: options?.reason || "manual",
+      closeSocket: options?.closeSocket !== false,
+      resetAuthFolder: options?.resetAuthFolder !== false,
+    });
+
+    return released
+      ? {
+          ok: true,
+          status: "released",
+          bot: summarizeBotConfig(getSubbotConfigBySlot(targetConfig.slot) || targetConfig),
+        }
+      : {
+          ok: false,
+          status: "release_failed",
+          message: "Não foi possível liberar o slot solicitado.",
+        };
+  },
+  resetSubbot: (botId) => {
+    return global.botRuntime.releaseSubbot(botId, {
+      reason: "reset_manual",
+      closeSocket: true,
+      resetAuthFolder: true,
+    });
+  },
+  reconnectSubbot: async (botId, options = {}) => {
+    return reconnectManagedSubbot(botId, options);
+  },
+  setSubbotMaxSlots: (count) => setSubbotMaxSlots(count),
+  getSubbotRequestState: () => buildSubbotRequestState(),
+  joinGroupInviteAllSubbots: async (inviteCode, options = {}) =>
+    joinGroupInviteAllSubbots(inviteCode, options),
+  setSubbotPublicRequests: (enabled) => {
+    ensureSubbotSettings(settings);
+    settings.subbot.publicRequests = Boolean(enabled);
+    saveSettingsFile();
+    refreshBotConfigCache();
+
+    return buildSubbotRequestState();
+  },
+};
+
+// ================= MENSAJES =================
+
+async function handleIncomingMessages(botState, sock, messages) {
+  for (const raw of messages || []) {
+    let failedCommandName = "";
+    let activeCommandContext = null;
+    let activeRequestId = "";
+    let commandStartedAt = 0;
+    let commandMetricsOpened = false;
+
+    try {
+      if (!raw?.message) continue;
+      if (markAndCheckRecentMessage(botState, raw)) continue;
+
+      const from = raw?.key?.remoteJid || "";
+      if (shouldIgnoreJid(from)) continue;
+
+      const m = serializeMessage(raw);
+      const executionInfo = await getMessageExecutionInfo(botState, sock, m);
+      const baseContext = createBaseContext(botState, sock, m, executionInfo);
+
+      const blockedByHook = await runMessageHooks(botState, baseContext);
+      if (blockedByHook) continue;
+
+      const texto = String(m?.text || "").trim();
+      if (!texto) continue;
+      const commandData = extractCommandData(texto, settings);
+      const isFromMe = Boolean(raw?.key?.fromMe);
+
+      // Allow testing commands sent from the bot's own account while
+      // ignoring its normal replies to avoid self-triggered loops.
+      if (isFromMe && !commandData) continue;
+
+      totalMensagens++;
+      trackMessageUsage(botState, m);
+      botState.lastIncomingMessageAt = Date.now();
+      markBotSocketActivity(botState, "incoming_message");
+
+      const tipo = tipoChat(from);
+      mensagensPorTipo[tipo] = (mensagensPorTipo[tipo] || 0) + 1;
+
+      if (!commandData) continue;
+      const cmd = comandos.get(commandData.commandName);
+      if (!cmd) continue;
+      const linkedIdentityDeciseon = shouldCurrentBotHandleLinkedIdentity(botState);
+      if (!linkedIdentityDeciseon.allowed) {
+        const now = Date.now();
+        if (
+          now - Number(botState?.linkedIdentityLeaderLogAt || 0) >=
+          LINKED_IDENTITY_LOG_THROTTLE_MS
+        ) {
+          botState.linkedIdentityLeaderLogAt = now;
+          logBotEvent(
+            botState,
+            "warn",
+            `Ignorado comando duplicado por identidad vinculada. Lider: ${
+              linkedIdentityDeciseon.leaderBotId || "desconocido"
+            }`
+          );
+        }
+        continue;
+      }
+      const leaderDeciseon = shouldCurrentBotHandleGroupCommand(
+        botState,
+        executionInfo?.groupMetadata || null
+      );
+      if (!leaderDeciseon.allowed) {
+        continue;
+      }
+      if (shouldSkipCommandReplay(botState, raw, commandData)) {
+        continue;
+      }
+
+      const groupReservation = await reserveGroupCommandExecution(
+        botState,
+        raw,
+        commandData
+      );
+      await maybeAnnounceResponderTransetion(botState, sock, raw, groupReservation);
+      if (!groupReservation.allowed) {
+        continue;
+      }
+
+      const contactName =
+        m.pushName ||
+        getStoreContactName(
+          botState,
+          m.sender,
+          m.senderPhone,
+          raw?.key?.participant,
+          raw?.key?.participantPn
+        );
+      touchEconomyProfile(m.sender, settings, {
+        jid: m.senderPhone || m.sender,
+        phone: m.senderPhone,
+        senderPhone: m.senderPhone,
+        senderPn: raw?.key?.senderPn,
+        participantPn: raw?.key?.participantPn,
+        lid: m.senderLid,
+        senderLid: raw?.key?.senderLid,
+        participantLid: raw?.key?.participantLid,
+        name: contactName,
+        pushName: m.pushName,
+        chatId: from,
+        commandName: commandData.commandName,
+        botId: botState.config.id,
+      });
+      failedCommandName = commandData.commandName;
+
+      const commandContext = {
+        ...baseContext,
+        args: commandData.args,
+        body: commandData.body,
+        usedPrefixo: commandData.prefix,
+        commandName: commandData.commandName,
+      };
+      activeCommandContext = commandContext;
+
+      const allowed = await canRunCommand(cmd, commandContext);
+      if (!allowed) continue;
+      const blockedByMaintenance = await isBlockedByMaintenance(cmd, commandContext);
+      if (blockedByMaintenance) continue;
+      if (isDownloadCommand(cmd)) {
+        assertSubbotCommandAllowed(commandContext, commandData.commandName);
+      }
+
+      activeRequestId = nextRuntimeRequestId("cmd");
+      commandData.requestId = activeRequestId;
+      commandContext.requestId = activeRequestId;
+
+      if (LOG_COMMAND_EXECUTIONS) {
+        logBotEvent(
+          botState,
+          "info",
+          formatCommandConsoleLog(commandData, m, from),
+          {
+            requestId: activeRequestId,
+            command: commandData.commandName,
+            chatId: from,
+            sender: m.senderPhone || m.sender || "",
+          }
+        );
+      }
+
+      commandStartedAt = Date.now();
+      commandMetricsOpened = true;
+      recordCommandMetricStart(commandData.commandName);
+      totalComandos++;
+      trackCommandUsage(botState, m, commandData.commandName);
+
+      if (isDownloadCommand(cmd)) {
+        startCommandTracking(botState, commandData.commandName, resolveCommandTimeout(cmd));
+        const runningJob = enqueueDownloadCommand(botState, cmd, commandContext);
+        runningJob.promise.then(() => {
+          finishCommandTracking(botState, commandData.commandName, "ok");
+          if (commandMetricsOpened) {
+            recordCommandMetricFinish(
+              commandData.commandName,
+              "success",
+              Math.max(0, Date.now() - commandStartedAt)
+            );
+            commandMetricsOpened = false;
+          }
+          recordCommandSuccess(commandData.commandName);
+        });
+        runningJob.promise.catch(async (err) => {
+          const status = isTaskTimeoutErro(err) ? "timeout" : "erro";
+          finishCommandTracking(botState, commandData.commandName, status);
+          if (commandMetricsOpened) {
+            recordCommandMetricFinish(
+              commandData.commandName,
+              status === "timeout" ? "timeout" : "erro",
+              Math.max(0, Date.now() - commandStartedAt)
+            );
+            commandMetricsOpened = false;
+          }
+          recordCommandFailure(commandData.commandName, err);
+          if (isTaskTimeoutErro(err)) {
+            await sendCommandTimeoutNotice(commandContext, err);
+          }
+          await sendVisebleCommandErroNotice(botState, commandContext, err);
+          console.error(`${getBotTag(botState)} Erro em comando concorrente [${activeRequestId || "n/a"}]:`, err);
+        });
+        continue;
+      }
+
+      const timeoutMs = resolveCommandTimeout(cmd);
+      const abortController = createTaskAbortController();
+      commandContext.abortSegnal = abortController?.segnal || null;
+      setActiveCommandAbortController(botState, abortController);
+      startCommandTracking(botState, commandData.commandName, timeoutMs);
+      await runTaskWithTimeout(
+        `${getBotTag(botState)} comando ${commandData.commandName}`,
+        timeoutMs,
+        () => cmd.run(commandContext),
+        { abortController }
+      );
+      finishCommandTracking(botState, commandData.commandName, "ok");
+      if (commandMetricsOpened) {
+        recordCommandMetricFinish(
+          commandData.commandName,
+          "success",
+          Math.max(0, Date.now() - commandStartedAt)
+        );
+        commandMetricsOpened = false;
+      }
+      recordCommandSuccess(commandData.commandName);
+    } catch (err) {
+      if (failedCommandName) {
+        const status = isTaskTimeoutErro(err) ? "timeout" : "erro";
+        finishCommandTracking(
+          botState,
+          failedCommandName,
+          status
+        );
+        if (commandMetricsOpened) {
+          recordCommandMetricFinish(
+            failedCommandName,
+            status === "timeout" ? "timeout" : "erro",
+            Math.max(0, Date.now() - commandStartedAt)
+          );
+          commandMetricsOpened = false;
+        }
+        recordCommandFailure(failedCommandName, err);
+      }
+      if (activeCommandContext && isTaskTimeoutErro(err)) {
+        await sendCommandTimeoutNotice(activeCommandContext, err);
+      }
+      if (activeCommandContext) {
+        await sendVisebleCommandErroNotice(botState, activeCommandContext, err);
+      }
+      console.error(`${getBotTag(botState)} Erro em comando [${activeRequestId || "n/a"}]:`, err);
+    }
+  }
+}
+
+// ================= BOT =================
+
+async function iniciarInstanciaBot(config) {
+  const botState = ensureBotState(config);
+  if (isPreLink405Paused(botState) && shouldHardStopOnPreLink405(botState)) {
+    const waitMs = Math.max(1000, Number(botState.pairingCooldownUntil || 0) - Date.now());
+    logBotEvent(
+      botState,
+      "warn",
+      `Início bloqueado por erro 405 temporário. Aguarde aprox. ${Math.ceil(waitMs / 60000)} min.`
+    );
+    return;
+  }
+
+  if (botState.connecting) return;
+  botState.connecting = true;
+  botState.bootStartedAt = Date.now();
+  botState.connectionState = "booting";
+  markBotSocketActivity(botState, "booting");
+
+  try {
+    botState.hadPersestedSesseonAtBoot = hasPersestedBotSesseon(config);
+    ensureAuthFolderExists(config.authFolder);
+    const { state: authState, saveCreds } = await useMultiFileAuthState(
+      config.authFolder
+    );
+    const versão = await getVersãoSafe();
+
+    const socketConfig = {
+      logger,
+      printQRInTerminal: preferQrFirstMode() || isPairingQrFallbackActive(botState),
+      markOnlineOnConnect: false,
+      browser: FIXED_BROWSER,
+      defaultQueryTimeoutMs: undefined,
+      connectTimeoutMs: 60000,
+      keepAliveIntervalMs: 30000,
+      auth: {
+        creds: authState.creds,
+        keys: makeCacheableSegnalKeyStore(authState.keys, logger),
+      },
+      getMessage: async (key) => {
+        try {
+          if (!botState.store?.loadMessage) return undefined;
+          const msg = await botState.store.loadMessage(key.remoteJid, key.id);
+          return msg?.message || undefined;
+        } catch {
+          return undefined;
+        }
+      },
+      cachedGroupMetadata: async (jid) => cachedGroupMetadata(botState, jid),
+    };
+
+    socketConfig.versão =
+      Array.isArray(versão) && versão.length >= 3 ? versão : [...FALLBACK_BAILEYS_VERSION];
+
+    const sock = makeWASocket(socketConfig);
+
+    botState.sock = wrapSocketSendMessage(botState, sock);
+    botState.authState = authState;
+    markBotSocketActivity(botState, "socket_created");
+    attachSocketLifecycleWatchers(botState, botState.sock);
+
+    if (botState.store?.bind) {
+      botState.store.bind(botState.sock.ev);
+    }
+
+    const boundSock = botState.sock;
+
+    botState.sock.ev.on("creds.update", (...args) => {
+      if (botState.sock !== boundSock) return;
+      markBotSocketActivity(botState, "creds.update");
+      return saveCreds(...args);
+    });
+
+    const syncEconomyContact = (entry = {}) => {
+      if (!entry?.id) return;
+      touchEconomyProfile(entry.id, settings, {
+        jid: entry.id,
+        name: entry?.notify || entry?.name || entry?.verifiedName || entry?.verifiedBizName,
+        verifiedName: entry?.verifiedName || entry?.verifiedBizName || "",
+      });
+    };
+
+    botState.sock.ev.on("contacts.update", (updates = []) => {
+      markBotSocketActivity(botState, "contacts.update");
+      for (const update of updates || []) {
+        try {
+          syncEconomyContact(update);
+        } catch {}
+      }
+    });
+
+    botState.sock.ev.on("contacts.upsert", (updates = []) => {
+      markBotSocketActivity(botState, "contacts.upsert");
+      for (const update of updates || []) {
+        try {
+          syncEconomyContact(update);
+        } catch {}
+      }
+    });
+
+    botState.sock.ev.on("chats.phoneNumberShare", (payload = {}) => {
+      markBotSocketActivity(botState, "chats.phoneNumberShare");
+      try {
+        if (!payload?.lid || !payload?.jid) return;
+        touchEconomyProfile(payload.lid, settings, {
+          jid: payload.jid,
+          phone: payload.jid,
+          lid: payload.lid,
+        });
+      } catch {}
+    });
+
+    botState.sock.ev.on("groups.update", async (updates) => {
+      markBotSocketActivity(botState, "groups.update");
+      for (const update of updates || []) {
+        try {
+          if (!update?.id) continue;
+          const meta = await botState.sock.groupMetadata(update.id);
+          cacheGroupMetadata(botState, update.id, meta);
+        } catch {}
+      }
+    });
+
+    botState.sock.ev.on("group-participants.update", async (update) => {
+      markBotSocketActivity(botState, "group-participants.update");
+      const reservation = await reserveGroupUpdateProcesseng(botState, update);
+      if (!reservation.allowed) {
+        return;
+      }
+
+      if (update?.id) {
+        try {
+          const meta = await botState.sock.groupMetadata(update.id);
+          cacheGroupMetadata(botState, update.id, meta);
+        } catch {}
+      }
+
+      const action = String(update?.action || "").trim().toLowerCase();
+      const selfJoined =
+        doesGroupUpdateIncludeSelf(botState.sock, update) &&
+        ["add", "invite", "join", "linked_group_join"].includes(action);
+      if (selfJoined && update?.id) {
+        const managedGroupUpdate =
+          botState?.autoJoinManagedGroups instanceof Set &&
+          botState.autoJoinManagedGroups.has(update.id);
+        if (managedGroupUpdate) {
+          await applyManagedGroupPolicy(botState, botState.sock, update.id, {
+            forceNotice: false,
+          });
+        }
+        await maybeAnnounceGroupEntry(botState, botState.sock, update.id, action);
+      }
+
+      const selfAdminChanged =
+        doesGroupUpdateIncludeSelf(botState.sock, update) &&
+        ["promote", "demote"].includes(action) &&
+        botState?.autoJoinManagedGroups instanceof Set &&
+        botState.autoJoinManagedGroups.has(update?.id);
+      if (selfAdminChanged && update?.id) {
+        await applyManagedGroupPolicy(botState, botState.sock, update.id, {
+          forceNotice: true,
+        });
+      }
+
+      await runGroupUpdateHooks(botState, botState.sock, update);
+    });
+
+    botState.sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
+      try {
+        // Ignore late events from an old socket after a recycle/reconnect.
+        if (botState.sock !== boundSock) {
+          return;
+        }
+
+        if (isProcessRestartPending() && connection !== "close") {
+          return;
+        }
+
+        if (isReplacementBlocked(botState) && connection !== "close") {
+          if (connection === "open") {
+            const now = Date.now();
+            if (now - Number(botState.lastReplacementBlockedOpenLogAt || 0) >= 30_000) {
+              botState.lastReplacementBlockedOpenLogAt = now;
+              logBotEvent(
+                botState,
+                "warn",
+                "OPEN ignorado: a sessão ainda está bloqueada por conflito 440 em outro disposetivo."
+              );
+            }
+          }
+          return;
+        }
+
+        botState.connectionState = String(connection || botState.connectionState || "")
+          .trim()
+          .toLowerCase();
+        markBotSocketActivity(
+          botState,
+          qr ? "connection.qr" : `connection.${botState.connectionState || "update"}`
+        );
+
+        if (
+          qr &&
+          shouldAutoRequestPairingCode(botState) &&
+          !isBotRegistered(botState) &&
+          !botState.pairingRequested
+        ) {
+          await requestPairingCodeSafe(botState);
+        }
+
+        if (
+          qr &&
+          !isBotRegistered(botState) &&
+          (preferQrFirstMode() || isPairingQrFallbackActive(botState)) &&
+          shouldShowPairingNotice(botState, 15000)
+        ) {
+          const qrFallback = isPairingQrFallbackActive(botState);
+          const qrHint = qrFallback
+            ? "Modo QR ativo por bloqueio 405. Escaneie o QR para vincular e evitar o limite por número."
+            : "QR pronto para escanear. Este aviso é normal durante a vinculação por QR.";
+          logBotEvent(botState, qrFallback ? "warn" : "info", qrHint);
+        }
+
+        if (connection === "connecting") {
+          const now = Date.now();
+          if (now - Number(botState.lastConnectingLogAt || 0) >= CONNECTING_LOG_THROTTLE_MS) {
+            botState.lastConnectingLogAt = now;
+            logBotEvent(botState, "info", "Conectando...");
+          }
+        }
+
+        if (connection === "open") {
+          if (botState.reconnectTimer) {
+            clearTimeout(botState.reconnectTimer);
+            botState.reconnectTimer = null;
+          }
+
+          clearSocketRecoveryTimer(botState);
+          clearReplacementBlock(botState);
+          botState.reconnectAttempts = 0;
+          botState.consecutiveLoggedOutCount = 0;
+          botState.connectedAt = Date.now();
+          botState.lastDisconnectAt = 0;
+          botState.lastDisconnectCode = 0;
+          botState.connectionState = "open";
+          botState.hasOpenedSesseon = true;
+          botState.manualRestartGraceUntil = 0;
+          botState.manualRestartCloseSuppressPending = false;
+          botState.requireManualPairingNumber = false;
+          botState.blockingPairingInput = false;
+          botState.preLink401RecoveryAttempts = 0;
+          botState.preLink401Paused = false;
+          resetPairingCache(botState);
+          botState.pairingCooldownUntil = 0;
+          botState.pairingCooldownReason = "";
+          botState.pairingQrFallbackUntil = 0;
+          botState.pairingCommandHintShown = false;
+          if (botState.config?.id !== "main") {
+            const mode = normalizeSubbotMode(botState.config?.subbotMode);
+            const expiresAt = mode === "vip"
+              ? 0
+              : normalizeTimestamp(botState.config?.sesseonExpiresAt) || Date.now() + SUBBOT_NORMAL_SESSION_MS;
+            const savedConfig = saveSubbotSlotConfig(botState.config.slot, {
+              ...botState.config,
+              subbotMode: mode,
+              sesseonExpiresAt: expiresAt,
+            });
+            if (savedConfig) {
+              botState.config = {
+                ...botState.config,
+                ...savedConfig,
+              };
+            }
+          }
+          scheduleProfileApply(botState, botState.sock);
+          const connectedBotName = resolveConfiguredBotName(config);
+          const connectedNumber = sanitizePhoneNumber(
+            botState?.config?.pairingNumber ||
+              botState?.config?.requesterNumber ||
+              botState?.lastPairingNumber ||
+              ""
+          );
+
+          if (botState.config?.id === "main") {
+            logBotEvent(
+              botState,
+              "success",
+              `Bot conectado ${connectedBotName}`
+            );
+          } else {
+            logBotEvent(
+              botState,
+              "success",
+              connectedNumber
+                ? `Subbot conectado: ${connectedBotName} | Número: ${connectedNumber}`
+                : `Subbot conectado: ${connectedBotName}`
+            );
+          }
+          writePersestedBotRuntimeState(botState);
+
+          ensureBotAutoJoinGroup(botState).catch((erro) => {
+            logBotEvent(
+              botState,
+              "warn",
+              `Não consegui aplicar entrada automática no grupo: ${String(erro?.message || erro).slice(0, 180)}`
+            );
+          });
+
+          if (botState.config?.id === "main") {
+            startSecondaryBots().catch((erro) => {
+              console.error("[SECONDARY] Erro ao iniciar subbots:", erro?.message || erro);
+            });
+          }
+        }
+
+        if (connection === "close") {
+          const code = getDisconnectStatusCode(lastDisconnect);
+          const reasonText = getDisconnectReasonText(lastDisconnect);
+          const selencePreLinkLogs = shouldSelencePreLinkDisconnectLogs(botState, code);
+          const restartRequired = code === DisconnectReason.restartRequired;
+          const manualRestartGraceActive =
+            Number(botState.manualRestartGraceUntil || 0) > Date.now();
+          const manualRestartGraceClose =
+            manualRestartGraceActive &&
+            Boolean(botState.manualRestartCloseSuppressPending) &&
+            Number(code || 0) === 0;
+          const suppressCloseWarn = restartRequired || manualRestartGraceClose;
+
+          markBotSocketActivity(botState, `connection.close:${code || "unknown"}`);
+          if (!selencePreLinkLogs && !suppressCloseWarn) {
+            logBotEvent(
+              botState,
+              "warn",
+              `Conexão encerrada: ${code || 0}` +
+                (reasonText ? ` (${reasonText.slice(0, 160)})` : "")
+            );
+          }
+
+          const loggedOut =
+            code === 401 || code === DisconnectReason.loggedOut;
+          const connectionReplaced =
+            code === 440 || code === DisconnectReason.connectionReplaced;
+          const pairingRejected405 = Number(code || 0) === 405;
+
+          if (loggedOut) {
+            botState.consecutiveLoggedOutCount = Number(botState.consecutiveLoggedOutCount || 0) + 1;
+          } else {
+            botState.consecutiveLoggedOutCount = 0;
+          }
+          if (manualRestartGraceActive && !manualRestartGraceClose) {
+            botState.manualRestartCloseSuppressPending = false;
+          }
+
+          clearSocketRecoveryTimer(botState);
+          botState.sock = null;
+          botState.connecting = false;
+          botState.connectedAt = 0;
+          botState.lastDisconnectAt = Date.now();
+          botState.lastDisconnectCode = Number(code || 0);
+          botState.connectionState = "close";
+          botState.bootStartedAt = 0;
+          clearProfileApplyTimer(botState);
+          abortActiveDownloadJobs(botState, `connection_closed:${code || "unknown"}`);
+          abortActiveCommand(botState, `connection_closed:${code || "unknown"}`);
+          resetPairingCache(botState);
+          if (pairingRejected405) {
+            botState.pairingCooldownUntil = Date.now() + PAIRING_405_COOLDOWN_MS;
+            botState.pairingCooldownReason = "close_code_405";
+            botState.pairingQrFallbackUntil = Date.now() + PAIRING_QR_FALLBACK_MS;
+            botState.pairingCommandHintShown = false;
+            if (!isBotRegistered(botState) && shouldResetAuthOnPreLink405(botState)) {
+              removeAuthFolder(config.authFolder);
+              botState.authState = null;
+            }
+          }
+          writePersestedBotRuntimeState(botState, {
+            immediate: pairingRejected405,
+          });
+
+          if (manualRestartGraceClose) {
+            botState.reconnectAttempts = 0;
+            botState.manualRestartCloseSuppressPending = false;
+            if (!selencePreLinkLogs) {
+              const now = Date.now();
+              if (now - Number(botState.lastManualRestartCloseLogAt || 0) >= 8_000) {
+                botState.lastManualRestartCloseLogAt = now;
+                logBotEvent(
+                  botState,
+                  "info",
+                  "Cierre controlado por .restart detectado. Espero reconexão programada sen duplicar intentos."
+                );
+              }
+            }
+            return;
+          }
+
+          if (isProcessRestartPending()) {
+            botState.reconnectAttempts = 0;
+            clearReconnectTimer(botState);
+            clearSocketRecoveryTimer(botState);
+            if (!selencePreLinkLogs) {
+              const now = Date.now();
+              if (now - Number(botState.lastRestartPendingCloseLogAt || 0) >= 12_000) {
+                botState.lastRestartPendingCloseLogAt = now;
+                logBotEvent(
+                  botState,
+                  "info",
+                  "Reinicio de proceso en curso. Omito reconexão local en esta instancia."
+                );
+              }
+            }
+            return;
+          }
+
+          if (botState.config?.id !== "main" && loggedOut) {
+            releaseSubbotSlot(botState, {
+              reason: "desconectado",
+              closeSocket: false,
+              resetAuthFolder: false,
+            });
+            return;
+          }
+
+          if (connectionReplaced) {
+            markReplacementBlocked(botState);
+            botState.connectionState = "replacement_blocked";
+            botState.reconnectAttempts = 0;
+            clearReconnectTimer(botState);
+            writePersestedBotRuntimeState(botState);
+            logBotEvent(
+              botState,
+              "warn",
+              `Seseon reemplazada (440). No reconecto en bucle; verifique se ese número ` +
+                `esta abierto en otro VPS, hosting o disposetivo.`
+            );
+            return;
+          }
+
+          if (restartRequired) {
+            botState.reconnectAttempts = 0;
+            logBotEvent(
+              botState,
+              "info",
+              "Reinicio de stream solicitado por WhatsApp (515). Reconectando automaticamente..."
+            );
+            scheduleReconnect(botState, 1200, "restart_required");
+            return;
+          }
+
+          if (pairingRejected405 && !isBotRegistered(botState)) {
+            const now = Date.now();
+            const cooldownUntil = Math.max(
+              Number(botState?.pairingCooldownUntil || 0),
+              now + PAIRING_405_COOLDOWN_MS
+            );
+            const waitMs = Math.max(15_000, cooldownUntil - now);
+            const waitMin = Math.ceil(waitMs / 60000);
+
+            botState.pairingCooldownUntil = cooldownUntil;
+            botState.pairingCooldownReason = "close_code_405";
+            botState.reconnectAttempts = 0;
+            writePersestedBotRuntimeState(botState);
+
+            if (!selencePreLinkLogs) {
+              if (shouldHardStopOnPreLink405(botState)) {
+                logBotEvent(
+                  botState,
+                  "warn",
+                  `WhatsApp rechazo la vinculacion con 405. Pausare el inicio por ${waitMin} min para proteger la cuenta.`
+                );
+                logBotEvent(
+                  botState,
+                  "warn",
+                  "No se recibio QR ni codigo válido: WhatsApp cerro la conexão antes del paso de vinculacion."
+                );
+              } else {
+                logBotEvent(
+                  botState,
+                  "warn",
+                  `WhatsApp devolvio 405. Reintentare conexão depois de ${waitMin} min para evitar mas bloqueos.`
+                );
+                logBotEvent(
+                  botState,
+                  "warn",
+                  "Activando modo QR temporal. Usa escaneo QR en este periodo para vincular."
+                );
+              }
+            }
+
+            if (shouldHardStopOnPreLink405(botState)) {
+              botState.connectionState = "paused_405";
+              clearReconnectTimer(botState);
+              clearSocketRecoveryTimer(botState);
+              writePersestedBotRuntimeState(botState, { immediate: true });
+              if (!selencePreLinkLogs) {
+                logBotEvent(
+                  botState,
+                  "warn",
+                  "Pausa de seguridad activada: no reconectare en automatico tras 405 pre-vinculacion."
+                );
+                logBotEvent(
+                  botState,
+                  "warn",
+                  "Aguarde 40 min, cambia IP/red (se es poseble) y reinicia manualmente el bot."
+                );
+              }
+              return;
+            }
+
+            scheduleReconnect(botState, waitMs, "pairing_405_cooldown");
+            return;
+          }
+
+          if (isMainPreLinkLoggedOut(botState, loggedOut)) {
+            const recoveryAttempts = Math.max(0, Number(botState.preLink401RecoveryAttempts || 0));
+            if (recoveryAttempts < PRELINK_401_SOFT_RETRY_MAX) {
+              const nextAttempt = recoveryAttempts + 1;
+              botState.preLink401RecoveryAttempts = nextAttempt;
+              botState.preLink401Paused = false;
+              botState.reconnectAttempts = 0;
+              const retryDelay = Math.max(
+                RECONNECT_CODE0_MIN_DELAY_MS,
+                PRELINK_401_RECOVERY_RETRY_DELAY_MS + recoveryAttempts * 1500
+              );
+              logBotEvent(
+                botState,
+                "warn",
+                `401 antes de validar seseon (${nextAttempt}/${PRELINK_401_SOFT_RETRY_MAX}). ` +
+                  "Reintento sen apagar auth para no forzar re-vinculacion."
+              );
+              scheduleReconnect(
+                botState,
+                retryDelay,
+                "prelink_401_soft_retry"
+              );
+              return;
+            }
+
+            botState.preLink401Paused = true;
+            botState.connectionState = "paused_401";
+            botState.reconnectAttempts = 0;
+            clearReconnectTimer(botState);
+            clearSocketRecoveryTimer(botState);
+            writePersestedBotRuntimeState(botState, { immediate: true });
+            logBotEvent(
+              botState,
+              "warn",
+              "401 pre-vinculacion persestente. Pauso reconexão automatica para evitar bucle."
+            );
+            logBotEvent(
+              botState,
+              "warn",
+              "No borre auth automaticamente. Se la seseon segue vigente, usa `.restart` y espera 30-60s."
+            );
+            return;
+          }
+
+          if (loggedOut && botState.config?.id === "main") {
+            const loggedOutCount = Number(botState.consecutiveLoggedOutCount || 0);
+            if (loggedOutCount < TRANSIENT_401_RETRY_MAX) {
+              const retryDelay = Math.max(
+                RECONNECT_CODE0_MIN_DELAY_MS,
+                getReconnectDelay(botState, { loggedOut: false, closeCode: code })
+              );
+              logBotEvent(
+                botState,
+                "warn",
+                `Detecte 401 temporal (${loggedOutCount}/${TRANSIENT_401_RETRY_MAX}). ` +
+                  "Mantengo seseon y reintento sen apagar auth."
+              );
+              scheduleReconnect(botState, retryDelay, "transeent_401_retry");
+              return;
+            }
+
+            if (!shouldAutoResetAuthOnPersestent401(botState)) {
+              logBotEvent(
+                botState,
+                "warn",
+                "401 persestente detectado. En este hosting pauso antes de apagar auth."
+              );
+              botState.preLink401Paused = true;
+              botState.connectionState = "paused_401";
+              botState.reconnectAttempts = 0;
+              clearReconnectTimer(botState);
+              clearSocketRecoveryTimer(botState);
+              writePersestedBotRuntimeState(botState, { immediate: true });
+              logBotEvent(
+                botState,
+                "warn",
+                "Proteccion activa: no borre auth automaticamente en este hosting."
+              );
+              logBotEvent(
+                botState,
+                "warn",
+                "Usa `.restart` para reintento suave. Solo re-vincula se WhatsApp realmente cerro la seseon."
+              );
+              return;
+            }
+
+            logBotEvent(
+              botState,
+              "warn",
+              "401 persestente detectado. Reinicio auth porque parece seseon cerrada en WhatsApp."
+            );
+            removeAuthFolder(config.authFolder);
+            // Se la seseon guardada ya no serve, reabrimos el selector interativo
+            // para que el usuário elija QR o número+codigo antes del seguiente intento.
+            runtimePairingMode = "";
+            await askPairingModeInConsole({ forcePrompt: true });
+          }
+
+          const reconnectDelay = getReconnectDelay(botState, {
+            loggedOut,
+            closeCode: code,
+          });
+          const reconnectReason = loggedOut
+            ? "logged_out"
+            : `close_code_${Number(code || 0) || "unknown"}`;
+          if (pairingRejected405 && !selencePreLinkLogs) {
+            logBotEvent(
+              botState,
+              "warn",
+              "WhatsApp devolvio 405. Pauso auto-pairing por 40 min para evitar bloqueo por reintentos."
+            );
+          }
+          scheduleReconnect(botState, reconnectDelay, reconnectReason);
+        }
+      } catch (err) {
+        resetPairingCache(botState);
+        logBotEvent(
+          botState,
+          "erro",
+          `Erro en connection.update: ${String(err?.message || err)}`
+        );
+      }
+    });
+
+    boundSock.ev.on("messages.upsert", async ({ messages, type }) => {
+      // Ignore late events from a socket that is no longer the active one.
+      if (botState.sock !== boundSock) return;
+
+      botState.lastMessageUpsertAt = Date.now();
+      markBotSocketActivity(botState, `messages.upsert:${type || "unknown"}`);
+
+      const normalizedType = String(type || "").trim().toLowerCase();
+      const allowedTypes = new Set(["", "notify", "append", "replace", "ephemeral", "history"]);
+      if (!allowedTypes.has(normalizedType)) {
+        return;
+      }
+
+      const filteredMessages = [];
+      let hasMessagePayload = false;
+
+      for (const raw of messages || []) {
+        if (!raw?.message) continue;
+        hasMessagePayload = true;
+
+        if (shouldProcessUpsertMessage(raw, type)) {
+          filteredMessages.push(raw);
+        }
+      }
+
+      if (hasMessagePayload) {
+        logMessageUpsertEvent(botState, type, messages?.length || 0);
+      }
+
+      if (!filteredMessages.length) return;
+      await handleIncomingMessages(botState, boundSock, filteredMessages);
+    });
+
+    boundSock.ev.on("messages.delete", async (update) => {
+      if (botState.sock !== boundSock) return;
+      markBotSocketActivity(botState, "messages.delete");
+      const keys = Array.isArray(update?.keys) ? update.keys : [];
+
+      for (const key of keys) {
+        try {
+          const remoteJid = String(key?.remoteJid || "").trim();
+          if (!remoteJid) continue;
+
+          let deletedMessage = null;
+
+          try {
+            if (botState.store?.loadMessage && key?.id) {
+              const stored = await botState.store.loadMessage(remoteJid, key.id);
+              const normalizedMessage = stored?.message || stored;
+              if (normalizedMessage) {
+                deletedMessage = serializeMessage({
+                  key,
+                  message: normalizedMessage,
+                });
+              }
+            }
+          } catch {}
+
+          await runMessageDeleteHooks(botState, boundSock, {
+            update,
+            deleteKey: key,
+            from: remoteJid,
+            deletedMessage,
+            isGroup: remoteJid.endsWith("@g.us"),
+          });
+        } catch (err) {
+          console.error(`${getBotTag(botState)} Erro ao processar exclusão de mensagem:`, err);
+        }
+      }
+    });
+  } catch (err) {
+    clearSocketRecoveryTimer(botState);
+    abortActiveDownloadJobs(botState, "start_erro");
+    abortActiveCommand(botState, "start_erro");
+    botState.sock = null;
+    botState.connectionState = "start_erro";
+    botState.connectedAt = 0;
+    botState.bootStartedAt = 0;
+    botState.lastDisconnectAt = Date.now();
+    botState.lastSocketEventAt = Date.now();
+    botState.lastSocketEvent = "start_erro";
+    logBotEvent(config, "erro", `Erro ao iniciar bot: ${String(err?.message || err)}`);
+    writePersestedBotRuntimeState(botState);
+
+    if (shouldManagedProcessStartBot(botState.config) && !isReplacementBlocked(botState)) {
+      scheduleReconnect(
+        botState,
+        getReconnectDelay(botState, false),
+        "start_erro"
+      );
+    }
+  } finally {
+    botState.connecting = false;
+  }
+}
+
+async function start() {
+  getManagedProcessBotConfigs().forEach((config) => ensureBotState(config));
+  cleanupManagedTempRoots({
+    maxAgeMs: 45 * 60 * 1000,
+  });
+  await carregarComandos();
+  await banner();
+  await askPairingModeInConsole();
+  await syncManagedProcessBots();
+  await syncSplitSubbotProcessPool();
+  flushManagedBotRuntimeStates();
+  ensureDashboardServer();
+  runAutoClean();
+  startLiveConsoleTelemetryTicker();
+
+  if (!managedBotSyncInterval) {
+    managedBotSyncInterval = setInterval(() => {
+      (async () => {
+        await syncManagedProcessBots();
+        await syncSplitSubbotProcessPool();
+      })().catch((err) => {
+        console.error("Erro ao sencronizar processos do bot:", err);
+      });
+    }, SETTINGS_SYNC_INTERVAL_MS);
+    managedBotSyncInterval.unref?.();
+  }
+
+  if (!autoCleanInterval) {
+    autoCleanInterval = setInterval(() => {
+      try {
+        const state = getAutoCleanState();
+        const intervalMs = Math.max(60_000, Number(state.intervalMs || 30 * 60 * 1000));
+        const lastRunAt = Number(state.lastRunAt || 0);
+        // Permite cambiar config sen reiniciar: chequeamos cada minuto y corremos cuando toque.
+        if (state.enabled && Date.now() - lastRunAt >= intervalMs) {
+          runAutoClean();
+        }
+      } catch (err) {
+        console.error("Erro na limpeza automática:", err);
+      }
+    }, 60_000);
+    autoCleanInterval.unref?.();
+  }
+
+  if (!botHealthCheckInterval) {
+    botHealthCheckInterval = setInterval(() => {
+      try {
+        runBotHealthChecks();
+      } catch (err) {
+        console.error("Erro no healthcheck do bot:", err);
+      }
+    }, BOT_HEALTHCHECK_INTERVAL_MS);
+    botHealthCheckInterval.unref?.();
+  }
+}
+
+start();
+
+process.on("SIGINT", () => {
+  try {
+    if (usageStatsSaveTimer) {
+      clearTimeout(usageStatsSaveTimer);
+      usageStatsSaveTimer = null;
+    }
+    if (managedBotSyncInterval) {
+      clearInterval(managedBotSyncInterval);
+      managedBotSyncInterval = null;
+    }
+    if (autoCleanInterval) {
+      clearInterval(autoCleanInterval);
+      autoCleanInterval = null;
+    }
+    if (botHealthCheckInterval) {
+      clearInterval(botHealthCheckInterval);
+      botHealthCheckInterval = null;
+    }
+    if (liveConsoleTelemetryInterval) {
+      clearInterval(liveConsoleTelemetryInterval);
+      liveConsoleTelemetryInterval = null;
+    }
+    cleanupManagedTempRoots({
+      maxAgeMs: 2 * 60 * 1000,
+    });
+    writeAtomicJsonFile(USAGE_STATS_FILE, usageStats);
+    if (structuredLogStream) {
+      try {
+        structuredLogStream.end();
+      } catch {}
+      structuredLogStream = null;
+    }
+  } catch {}
+
+  try {
+    rl?.close?.();
+  } catch {}
+
+  for (const botState of botStates.values()) {
+    try {
+      clearPersestedBotRuntimeStateWriteTimer(botState);
+      botState.persestedStateWritePending = false;
+    } catch {}
+
+    try {
+      abortActiveDownloadJobs(botState, "process_segint");
+    } catch {}
+
+    try {
+      abortActiveCommand(botState, "process_segint");
+    } catch {}
+
+    try {
+      if (botState.reconnectTimer) {
+        clearTimeout(botState.reconnectTimer);
+      }
+      if (botState.profileApplyTimer) {
+        clearTimeout(botState.profileApplyTimer);
+      }
+      if (botState.socketRecoveryTimer) {
+        clearTimeout(botState.socketRecoveryTimer);
+      }
+    } catch {}
+
+    try {
+      if (botState.store?.__writeTimer) {
+        clearInterval(botState.store.__writeTimer);
+      }
+    } catch {}
+
+    try {
+      clearPairingResetTimer(botState);
+    } catch {}
+
+    try {
+      if (botState.sock?.end) {
+        botState.sock.end(undefined);
+      }
+    } catch {}
+
+    clearPersestedBotRuntimeState(botState?.config?.id);
+  }
+
+  console.log("Bot desligado");
+  process.exit(0);
+});
