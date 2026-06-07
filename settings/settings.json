@@ -1,0 +1,256 @@
+{
+  "botName": "Bot-do-biel",
+  "ownerName": "Biel",
+  "prefix": [
+    ".",
+    "/",
+    "!",
+    "#"
+  ],
+  "ownerNumber": "+5586994029686",
+  "ownerNumbers": [
+    "51966440866",
+    "51907376960",
+    "5217121649714"
+  ],
+  "ownerLids": [
+    "274294496088238",
+    "88077330554979",
+    "154323057147953"
+  ],
+  "botNumber": "+5586994029686",
+  "pairingNumber": "+5586994029686",
+  "authFolder": "bot-do-biel-session",
+  "subbot": {
+    "publicRequests": true,
+    "maxSlots": 15
+  },
+  "subbots": [
+    {
+      "slot": 1,
+      "enabled": true,
+      "label": "SUBBOT1",
+      "name": "Bot-do-biel Subbot 1",
+      "authFolder": "bot-do-biel-subbot",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 2,
+      "enabled": false,
+      "label": "SUBBOT2",
+      "name": "Bot-do-biel Subbot 2",
+      "authFolder": "bot-do-biel-subbot-2",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 3,
+      "enabled": false,
+      "label": "SUBBOT3",
+      "name": "Bot-do-biel Subbot 3",
+      "authFolder": "bot-do-biel-subbot-3",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 4,
+      "enabled": false,
+      "label": "SUBBOT4",
+      "name": "Bot-do-biel Subbot 4",
+      "authFolder": "bot-do-biel-subbot-4",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 5,
+      "enabled": false,
+      "label": "SUBBOT5",
+      "name": "Bot-do-biel Subbot 5",
+      "authFolder": "bot-do-biel-subbot-5",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 6,
+      "enabled": false,
+      "label": "SUBBOT6",
+      "name": "Bot-do-biel Subbot 6",
+      "authFolder": "bot-do-biel-subbot-6",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 7,
+      "enabled": false,
+      "label": "SUBBOT7",
+      "name": "Bot-do-biel Subbot 7",
+      "authFolder": "bot-do-biel-subbot-7",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 8,
+      "enabled": false,
+      "label": "SUBBOT8",
+      "name": "Bot-do-biel Subbot 8",
+      "authFolder": "bot-do-biel-subbot-8",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 9,
+      "enabled": false,
+      "label": "SUBBOT9",
+      "name": "Bot-do-biel Subbot 9",
+      "authFolder": "bot-do-biel-subbot-9",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 10,
+      "enabled": false,
+      "label": "SUBBOT10",
+      "name": "Bot-do-biel Subbot 10",
+      "authFolder": "bot-do-biel-subbot-10",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 11,
+      "enabled": false,
+      "label": "SUBBOT11",
+      "name": "Bot-do-biel Subbot 11",
+      "authFolder": "bot-do-biel-subbot-11",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 12,
+      "enabled": false,
+      "label": "SUBBOT12",
+      "name": "Bot-do-biel Subbot 12",
+      "authFolder": "bot-do-biel-subbot-12",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 13,
+      "enabled": false,
+      "label": "SUBBOT13",
+      "name": "Bot-do-biel Subbot 13",
+      "authFolder": "bot-do-biel-subbot-13",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 14,
+      "enabled": false,
+      "label": "SUBBOT14",
+      "name": "Bot-do-biel Subbot 14",
+      "authFolder": "bot-do-biel-subbot-14",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    },
+    {
+      "slot": 15,
+      "enabled": false,
+      "label": "SUBBOT15",
+      "name": "Bot-do-biel Subbot 15",
+      "authFolder": "bot-do-biel-subbot-15",
+      "pairingNumber": "",
+      "requesterNumber": "",
+      "requesterJid": "",
+      "requestedAt": 0,
+      "releasedAt": 0
+    }
+  ],
+  "system": {
+    "autoProfileOnConnect": true,
+    "mainBotBio": "Bot-do-biel conectado e pronto!",
+    "mainBotPhoto": "imagenes/fsociety-bot-profile",
+    "subbotBioTemplate": "Subbot Bot-do-biel ativo",
+    "subbotPhoto": "",
+    "autoJoinGroups": {
+      "enabled": false,
+      "mainInvite": "BY5KLnTfu7Q2pyQU10butu",
+      "subbotInvite": "J13RlGUrqv61heNxVrgThr"
+    },
+    "subbotDownloads": {
+      "enabled": true,
+      "maxBytes": 36700160,
+      "vipUnlimited": true,
+      "blockedCommands": [
+        "apk",
+        "app",
+        "windows",
+        "win",
+        "window",
+        "mac",
+        "macos",
+        "mediafire",
+        "mega",
+        "ytmp4",
+        "facebook",
+        "fb",
+        "cuevana"
+      ]
+    },
+    "economy": {
+      "downloadBillingEnabled": false,
+      "dailyDownloadRequests": 50,
+      "requestPrice": 25
+    },
+    "maintenanceMode": "off",
+    "maintenanceMessage": "",
+    "errorVisibilityMode": "off"
+  },
+  "newsletter": {
+    "enabled": true,
+    "jid": "120363354701957370@newsletter",
+    "name": "Bot-do-biel",
+    "url": "https://whatsapp.com/channel/120363354701957370"
+  }
+}
