@@ -1,0 +1,32 @@
+{
+  "enabled": true,
+  "threshold": 4,
+  "windowMs": 600000,
+  "cooldownMs": 900000,
+  "commands": {
+    "menu": {
+      "failures": [],
+      "disabledUntil": 0,
+      "lastErro": "",
+      "lastFailureAt": 0
+    },
+    "administradores": {
+      "failures": [],
+      "disabledUntil": 0,
+      "lastErro": "",
+      "lastFailureAt": 0
+    },
+    "play": {
+      "failures": [],
+      "disabledUntil": 0,
+      "lastErro": "",
+      "lastFailureAt": 0
+    },
+    "ytmp3": {
+      "failures": [],
+      "disabledUntil": 0,
+      "lastErro": "",
+      "lastFailureAt": 0
+    }
+  }
+}
